@@ -20,20 +20,54 @@ command, get a polished native window — but for git history instead of Markdow
 - **Live reload** — ⌘R, or `--watch` to auto-refresh when you commit/checkout
 - **Fully offline** — the graph is drawn with hand-written SVG; no network needed
 
-## Installation
+## Requirements
 
-### Build from source
+- **macOS 13.0 (Ventura) or later** — the app uses AppKit and WebKit
+- **Swift 5.9+ toolchain** — the Xcode command-line tools provide it
+  (`xcode-select --install`)
+- **`git` on your `PATH`** — git-graph shells out to it at runtime; the
+  command-line tools include it
 
-Requires Xcode command-line tools and Swift 5.9+.
+No network connection is needed: the graph is drawn entirely on-device.
+
+## Building
+
+The project is a Swift package — there is no Xcode project to open.
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/tengla/GitGraphRender.git
 cd GitGraphRender
-swift build -c release
 
-# Copy to your bin directory
-cp .build/release/git-graph ~/bin/
+# Debug build
+swift build
+
+# Optimized release build → .build/release/git-graph
+swift build -c release
 ```
+
+Run it without installing:
+
+```bash
+swift run git-graph                 # the repo in the current directory
+swift run git-graph /path/to/repo   # any other repository
+```
+
+If you have [Task](https://taskfile.dev) installed, the included `Taskfile.yml`
+wraps these: `task build`, `task build:release`, `task run`, `task size`, and
+`task --list` to see them all.
+
+## Installation
+
+Build the release binary (see [Building](#building)) and copy it onto your `PATH`:
+
+```bash
+swift build -c release
+mkdir -p ~/bin
+cp .build/release/git-graph ~/bin/
+# ensure ~/bin is on your PATH
+```
+
+Or let the Taskfile do it: `task install` (installs to `~/bin`).
 
 ## Usage
 
@@ -68,11 +102,6 @@ machine-readable format), assigns each commit a lane and color with a standard
 branch-tracking layout algorithm, serializes the result to JSON, and renders it
 as SVG inside a `WKWebView`. Clicking a commit lazily fetches its diff via
 `git show` so the initial load stays fast even on large repositories.
-
-## Requirements
-
-- macOS 13.0 (Ventura) or later
-- `git` available on `PATH` (the Xcode command-line tools include it)
 
 ## Project Structure
 

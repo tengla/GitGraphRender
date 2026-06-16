@@ -69,8 +69,13 @@ struct GitRepository {
             "%H", "%h", "%P", "%an", "%ae", "%at", "%s", "%b", "%D"
         ].joined(separator: Self.fieldSep) + Self.recordSep
 
+        // --topo-order is essential, not cosmetic: the lane algorithm in
+        // GraphLayout requires every commit to be emitted before any of its
+        // parents. Plain date order violates that when commits share timestamps
+        // (or when clocks are skewed across machines), which corrupts merge edges.
         var args = ["-C", topLevel.path, "log",
                     "--pretty=format:\(format)",
+                    "--topo-order",
                     "-z",                       // NUL-terminate records too (belt and suspenders)
                     "--max-count=\(maxCount)"]
         if allBranches {

@@ -101,10 +101,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             let json = String(data: jsonData, encoding: .utf8) ?? "{}"
 
             let html = HTMLGenerator.generateHTML(graphJSON: json, theme: theme)
-            webView.loadHTMLString(html, baseURL: nil)
+            webView.loadHTMLString(html, baseURL: repo.topLevel)
         } catch {
             let html = HTMLGenerator.generateErrorHTML(error: error.localizedDescription)
-            webView.loadHTMLString(html, baseURL: nil)
+            webView.loadHTMLString(html, baseURL: repo.topLevel)
         }
     }
 
@@ -140,22 +140,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     private func setupMenu() {
         let mainMenu = NSMenu()
 
+        // Helper: add an item whose action targets *this* delegate explicitly.
+        // Without an explicit target, AppKit routes the action down the responder
+        // chain, where the first-responder WKWebView intercepts methods it also
+        // implements. In particular `reload(_:)` is a real WKWebView action — so
+        // ⌘R would reload the WebView's (non-navigable loadHTMLString) document
+        // and blank the window instead of calling our loadGraph(). Pinning the
+        // target to self prevents that.
+        func add(_ menu: NSMenu, _ title: String, _ action: Selector, _ key: String,
+                 modifiers: NSEvent.ModifierFlags = .command) {
+            let item = menu.addItem(withTitle: title, action: action, keyEquivalent: key)
+            item.target = self
+            item.keyEquivalentModifierMask = modifiers
+        }
+
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "About git-graph", action: #selector(showAbout), keyEquivalent: "")
+        add(appMenu, "About git-graph", #selector(showAbout), "")
         appMenu.addItem(.separator())
+        // Quit legitimately targets NSApp via the responder chain — leave it.
         appMenu.addItem(withTitle: "Quit git-graph", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
         mainMenu.addItem(appItem)
 
         let viewItem = NSMenuItem()
         let viewMenu = NSMenu(title: "View")
-        viewMenu.addItem(withTitle: "Reload", action: #selector(reload), keyEquivalent: "r")
-        viewMenu.addItem(withTitle: "Find…", action: #selector(find), keyEquivalent: "f")
+        add(viewMenu, "Reload", #selector(reload), "r")
+        add(viewMenu, "Find…", #selector(find), "f")
         viewMenu.addItem(.separator())
-        viewMenu.addItem(withTitle: "Actual Size", action: #selector(resetZoom), keyEquivalent: "0")
-        viewMenu.addItem(withTitle: "Zoom In", action: #selector(zoomIn), keyEquivalent: "+")
-        viewMenu.addItem(withTitle: "Zoom Out", action: #selector(zoomOut), keyEquivalent: "-")
+        add(viewMenu, "Actual Size", #selector(resetZoom), "0")
+        add(viewMenu, "Zoom In", #selector(zoomIn), "+")
+        add(viewMenu, "Zoom Out", #selector(zoomOut), "-")
         viewItem.submenu = viewMenu
         mainMenu.addItem(viewItem)
 

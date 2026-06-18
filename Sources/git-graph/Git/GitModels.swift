@@ -37,6 +37,26 @@ struct Commit: Codable {
     var parentLanes: [Int] = []
 }
 
+/// One commit in an author's activity report — a trimmed `Commit` with only the
+/// fields the author panel renders. Fetched lazily (repo-wide) on click, separate
+/// from the graph's loaded commits, so it isn't limited to HEAD's history.
+struct AuthorCommit: Codable {
+    let hash: String
+    let shortHash: String
+    let timestamp: Double
+    let subject: String
+}
+
+/// The activity report for a single author, computed by one `git log --all`.
+/// Spans the whole repo (not just the loaded graph), and excludes merge commits
+/// so the numbers reflect authored work rather than PR-merge clicks.
+struct AuthorActivity: Codable {
+    let name: String           // most-recent display name for this author
+    let email: String          // the identity we queried on
+    let commits: [AuthorCommit] // newest-first, merges excluded
+    let mergeCount: Int        // merge commits authored (shown separately)
+}
+
 /// The full payload handed to the WebView: commits plus a little metadata.
 struct GraphData: Codable {
     let commits: [Commit]

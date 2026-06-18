@@ -199,6 +199,109 @@ struct GitRepository {
         return output
     }
 
+    // MARK: - Lazy author activity for the author panel
+
+    /// Builds an activity report for one author, fetched on click.
+    ///
+    /// Scoped to the time window of the commits currently loaded in the graph
+    /// (`since`/`until`, Unix seconds): the panel answers "what has this author
+    /// done within the range I'm looking at", not their entire repo history. Pass
+    /// `nil` bounds to span all of time.
+    ///
+    /// Within that window it queries `--all` so it surfaces the author's *real*
+    /// commits on feature branches — not just the merge commits that land on the
+    /// checked-out branch. Merges are excluded from the commit list and counted
+    /// separately, since in a PR workflow the merge author is whoever clicked
+    /// "merge", not who did the work.
+    func authorActivity(email: String, since: Double? = nil, until: Double? = nil,
+                        maxCount: Int = 2000) -> AuthorActivity? {
+        // The email is user-controlled and goes into an --author arg, so guard it:
+        // require a basic shape (one "@", no whitespace). The no-whitespace rule
+        // also blocks argument injection via newlines. We do NOT blocklist regex
+        // metacharacters — legal local-parts contain them (notably "+" in GitHub
+        // noreply addresses, and "." everywhere). The fixed-string match below
+        // (-F) makes those characters literal, so no escaping is needed.
+        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              trimmed.range(of: "^[^\\s@]+@[^\\s@]+$", options: .regularExpression) != nil
+        else { return nil }
+
+        let format = ["%H", "%h", "%at", "%an", "%s"].joined(separator: Self.fieldSep) + Self.recordSep
+
+        // `git --author` matches against the whole "Name <email>" ident string.
+        // We match it as a *fixed string* (`-F`) rather than a regex: git's regex
+        // dialect is POSIX, not PCRE, so backslash-escaping metacharacters (the
+        // way NSRegularExpression does) silently fails to match — emails with "+"
+        // or "." (e.g. GitHub noreply addresses) would find nothing.
+        //
+        // Wrapping the email in angle brackets — "<email>" — gives exact-field
+        // precision even as a substring: the leading "<" anchors the start of the
+        // email field and the trailing ">" anchors its end, so querying "a@b.com"
+        // matches neither "xa@b.com" nor "a@b.com.evil".
+        // --all spans every ref; --no-merges drops merge commits.
+        let authorArg = "--author=<\(trimmed)>"
+        var logArgs = ["-C", topLevel.path, "log",
+                       "--all", "--no-merges", "-F",
+                       "--pretty=format:\(format)",
+                       "-z",
+                       "--max-count=\(maxCount)"]
+        logArgs += Self.dateRangeArgs(since: since, until: until)
+        logArgs.append(authorArg)
+
+        guard let raw = try? Self.run(logArgs, workingDirectory: topLevel) else { return nil }
+
+        let cleaned = raw.replacingOccurrences(of: "\u{00}", with: "")
+        var commits: [AuthorCommit] = []
+        var displayName = ""
+        for record in cleaned.components(separatedBy: Self.recordSep) {
+            if record.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
+            let f = record.components(separatedBy: Self.fieldSep)
+            guard f.count >= 5 else { continue }
+            let hash = f[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !hash.isEmpty else { continue }
+            if displayName.isEmpty { displayName = f[3] }   // newest commit's name
+            commits.append(AuthorCommit(
+                hash: hash,
+                shortHash: f[1].trimmingCharacters(in: .whitespacesAndNewlines),
+                timestamp: Double(f[2].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0,
+                subject: f[4]
+            ))
+        }
+
+        // Separate count of merge commits this author landed, within the same
+        // window (for context — "you landed N PRs in this range").
+        var mergeArgs = ["-C", topLevel.path, "rev-list", "--all", "--merges",
+                         "-F", "--count"]
+        mergeArgs += Self.dateRangeArgs(since: since, until: until)
+        mergeArgs.append(authorArg)
+        let mergeCount = (try? Self.run(mergeArgs, workingDirectory: topLevel))
+            .flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? 0
+
+        return AuthorActivity(
+            name: displayName.isEmpty ? trimmed : displayName,
+            email: trimmed,
+            commits: commits,
+            mergeCount: mergeCount
+        )
+    }
+
+    /// Builds `--since`/`--until` args from optional Unix-second bounds.
+    ///
+    /// We pass epoch seconds with an explicit format so git interprets them as
+    /// absolute instants (not relative dates). `--until` is inclusive; we nudge it
+    /// up by one second so a commit exactly at the newest loaded timestamp isn't
+    /// dropped by boundary rounding.
+    private static func dateRangeArgs(since: Double?, until: Double?) -> [String] {
+        var args: [String] = []
+        if let since, since > 0 {
+            args.append("--since=\(Int(since.rounded(.down))) +0000")
+        }
+        if let until, until > 0 {
+            args.append("--until=\(Int(until.rounded(.up)) + 1) +0000")
+        }
+        return args
+    }
+
     // MARK: - Process plumbing
 
     @discardableResult

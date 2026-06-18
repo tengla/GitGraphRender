@@ -588,7 +588,7 @@ struct HTMLGenerator {
                 const authorEl = info.querySelector('.row-author');
                 authorEl.addEventListener('click', (e) => {
                     e.stopPropagation();
-                    openAuthor(c.authorEmail || c.authorName);
+                    openAuthor(c.authorEmail, c.authorName);
                 });
                 row.addEventListener('click', () => openDetail(i));
                 row.addEventListener('mouseenter', (e) => showTooltip(e, c));
@@ -675,14 +675,27 @@ struct HTMLGenerator {
             }
 
             // ---- Author activity panel ----
-            // Reuses the same slide-in panel. Everything is computed from the
-            // commits already in GRAPH_DATA — the "time frame" is exactly the
-            // range currently loaded in the graph (newest..oldest shown), so no
-            // extra git calls are needed and it works fully offline.
+            // Reuses the same slide-in panel. The report is fetched lazily from
+            // the native side, scoped to the date window of the commits currently
+            // loaded in the graph — so it answers "what has this author done in
+            // the range I'm looking at". Within that window it uses `--all` (so it
+            // catches their real feature-branch work, not just the merge commits
+            // that land on HEAD) with `--no-merges` (so merge clicks don't inflate
+            // the counts; merges in the window are reported separately).
 
-            // Group commits by author identity once. We key on email when present
-            // (stable across name spelling changes) and fall back to the name.
-            function authorKey(c) { return (c.authorEmail || c.authorName || '').toLowerCase(); }
+            // The loaded graph's time bounds (Unix seconds), sent with each query
+            // so the report matches the visible range. The list is --topo-order,
+            // not strictly time-sorted, so take the actual min/max rather than the
+            // first/last element.
+            let loadedSince = Infinity, loadedUntil = 0;
+            commits.forEach(c => {
+                if (c.timestamp < loadedSince) loadedSince = c.timestamp;
+                if (c.timestamp > loadedUntil) loadedUntil = c.timestamp;
+            });
+            if (!commits.length) { loadedSince = 0; loadedUntil = 0; }
+            // If the graph isn't capped, it reaches the repo root — don't impose a
+            // lower bound, so the very first commits aren't excluded by rounding.
+            const sinceBound = data.truncated ? loadedSince : null;
 
             // Eight palette hues, used to give each author a stable avatar color.
             function colorForKey(key) {
@@ -691,32 +704,23 @@ struct HTMLGenerator {
                 return laneColor(h % 8);
             }
 
-            function openAuthor(identity) {
-                const key = String(identity || '').toLowerCase();
-                const mine = commits.filter(c => authorKey(c) === key);
-                if (!mine.length) return;
+            // Remember the last-clicked identity so a late async reply that no
+            // longer matches the open panel is ignored.
+            let pendingAuthorEmail = null;
+
+            function openAuthor(email, name) {
+                email = (email || '').trim();
+                name = name || email;
 
                 // Clear any commit-row selection — this is an author view, not a commit.
                 if (selectedRow) { selectedRow.classList.remove('selected'); selectedRow = null; }
 
-                // Newest-first is how commits are already ordered; for stats we want
-                // the actual time bounds across this author's commits.
-                const times = mine.map(c => c.timestamp);
-                const firstT = Math.min.apply(null, times);   // oldest commit
-                const lastT  = Math.max.apply(null, times);   // newest commit
-                const name = mine[0].authorName;
-                const email = mine[0].authorEmail;
-
-                // Active days: distinct local calendar days they committed on.
-                const days = new Set(mine.map(c => new Date(c.timestamp * 1000).toDateString()));
-
-                // Share of the loaded history.
-                const sharePct = Math.round((mine.length / commits.length) * 100);
-
+                const accent = colorForKey((email || name).toLowerCase());
                 const initials = (name || email || '?').trim().charAt(0);
-                const accent = colorForKey(key);
 
-                let html =
+                // Open immediately with a header + loading state; the stats/commits
+                // arrive from Swift via renderAuthor().
+                content.innerHTML =
                     '<div class="author-head">' +
                         '<div class="author-avatar" style="background:' + accent + '">' + escapeHTML(initials) + '</div>' +
                         '<div>' +
@@ -724,18 +728,74 @@ struct HTMLGenerator {
                             (email ? '<div class="author-email">' + escapeHTML(email) + '</div>' : '') +
                         '</div>' +
                     '</div>' +
+                    '<div class="detail-loading" id="author-slot">Loading activity…</div>';
+
+                panel.classList.add('open');
+                backdrop.classList.add('open');
+
+                // Without an email we can't run the repo-wide query reliably.
+                if (!email) {
+                    const slot = document.getElementById('author-slot');
+                    if (slot) slot.textContent = 'No email recorded for this author.';
+                    return;
+                }
+
+                pendingAuthorEmail = email.toLowerCase();
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.author) {
+                    window.webkit.messageHandlers.author.postMessage({
+                        email: email,
+                        since: sinceBound,
+                        until: loadedUntil
+                    });
+                } else {
+                    const slot = document.getElementById('author-slot');
+                    if (slot) slot.textContent = '(author activity unavailable in this context)';
+                }
+            }
+
+            // Called by Swift once `git log --all` returns. `report` is an
+            // AuthorActivity JSON object, or null if the query failed.
+            window.renderAuthor = function (email, report) {
+                // Ignore stale replies (user clicked a different author since).
+                if (!email || email.toLowerCase() !== pendingAuthorEmail) return;
+                const slot = document.getElementById('author-slot');
+                if (!slot) return;
+
+                if (!report || !report.commits || !report.commits.length) {
+                    slot.className = 'detail-loading';
+                    slot.textContent = report && report.mergeCount
+                        ? 'Only merge commits in this range (' + report.mergeCount + ' merge' +
+                          (report.mergeCount === 1 ? '' : 's') + ' landed, no authored commits).'
+                        : 'No commits by this author in the loaded range.';
+                    return;
+                }
+
+                const mine = report.commits;               // newest-first, no merges
+                const times = mine.map(c => c.timestamp);
+                const firstT = Math.min.apply(null, times);
+                const lastT  = Math.max.apply(null, times);
+                const days = new Set(mine.map(c => new Date(c.timestamp * 1000).toDateString()));
+
+                let html =
                     '<div class="stat-grid">' +
                         statCard(mine.length.toLocaleString(), 'commit' + (mine.length === 1 ? '' : 's')) +
                         statCard(days.size.toLocaleString(), 'active day' + (days.size === 1 ? '' : 's')) +
                         statCard(spanLabel(firstT, lastT), 'span') +
                     '</div>' +
-                    '<div class="stat-share">' + sharePct + '% of the ' + commits.length.toLocaleString() +
-                        ' commit' + (commits.length === 1 ? '' : 's') + ' loaded · ' +
-                        'first ' + new Date(firstT * 1000).toLocaleDateString() +
-                        ' · latest ' + new Date(lastT * 1000).toLocaleDateString() + '</div>';
+                    '<div class="stat-share">in the loaded range · first ' +
+                        new Date(firstT * 1000).toLocaleDateString() +
+                        ' · latest ' + new Date(lastT * 1000).toLocaleDateString() +
+                        (report.mergeCount ? ' · ' + report.mergeCount.toLocaleString() +
+                            ' merge' + (report.mergeCount === 1 ? '' : 's') + ' landed' : '') +
+                    '</div>';
 
                 // ---- Timeline ----
-                html += '<div class="detail-section-title">Activity</div>' + buildTimeline(times);
+                // Span the loaded graph window (not just the author's first/last
+                // commit) so the bars sit where this author's activity falls within
+                // the visible range, and quiet stretches read as gaps.
+                const tlSince = (loadedSince && loadedSince <= firstT) ? loadedSince : firstT;
+                const tlUntil = (loadedUntil && loadedUntil >= lastT) ? loadedUntil : lastT;
+                html += '<div class="detail-section-title">Activity</div>' + buildTimeline(times, tlSince, tlUntil);
 
                 // ---- This author's commits ----
                 html += '<div class="detail-section-title">Commits (' + mine.length.toLocaleString() + ')</div>';
@@ -750,19 +810,22 @@ struct HTMLGenerator {
                 });
                 html += '</div>';
 
-                content.innerHTML = html;
+                slot.className = '';
+                slot.innerHTML = html;
 
-                // Clicking one of the author's commits jumps to its full detail.
-                content.querySelectorAll('.author-commit').forEach(el => {
-                    el.addEventListener('click', () => {
-                        const idx = byHash[el.dataset.hash];
-                        if (idx !== undefined) openDetail(idx);
-                    });
+                // Clicking one of the author's commits jumps to its full detail —
+                // but only if that commit is actually loaded in the graph (repo-wide
+                // results can include commits outside the loaded window).
+                slot.querySelectorAll('.author-commit').forEach(el => {
+                    const idx = byHash[el.dataset.hash];
+                    if (idx === undefined) {
+                        el.style.cursor = 'default';
+                        el.title = 'Not in the loaded graph';
+                        return;
+                    }
+                    el.addEventListener('click', () => openDetail(idx));
                 });
-
-                panel.classList.add('open');
-                backdrop.classList.add('open');
-            }
+            };
 
             function statCard(value, label) {
                 return '<div class="stat-card"><div class="stat-value">' + escapeHTML(String(value)) +
@@ -781,15 +844,10 @@ struct HTMLGenerator {
                 return '1 day';
             }
 
-            // Bucket the author's commit times into ~24 bars spanning the loaded
-            // history (so multiple authors line up on the same axis). Buckets are
-            // by week when the loaded range is long, by day when it's short.
-            function buildTimeline(times) {
-                // Span the whole loaded graph, not just this author, so the bars
-                // are comparable and the author's gaps are visible.
-                const allTimes = commits.map(c => c.timestamp);
-                const lo = Math.min.apply(null, allTimes);
-                const hi = Math.max.apply(null, allTimes);
+            // Bucket the author's commit times into ~24 bars spanning their own
+            // first→latest range, so the shape shows when they were active and
+            // their gaps are visible.
+            function buildTimeline(times, lo, hi) {
                 const totalSecs = Math.max(1, hi - lo);
 
                 const BUCKETS = 24;

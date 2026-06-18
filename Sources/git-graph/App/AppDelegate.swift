@@ -75,6 +75,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         // Bridge: JS posts a commit hash → we reply with its diff.
         config.userContentController.add(self, name: "commit")
+        // Bridge: JS posts an author email → we reply with their activity report.
+        config.userContentController.add(self, name: "author")
 
         webView = WKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
@@ -114,13 +116,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
     func userContentController(_ userContentController: WKUserContentController,
                                didReceive message: WKScriptMessage) {
-        guard message.name == "commit", let hash = message.body as? String else { return }
+        switch message.name {
+        case "commit":
+            if let hash = message.body as? String { handleCommitRequest(hash: hash) }
+        case "author":
+            // Payload is { email, since, until } — the email plus the loaded
+            // graph's date window (Unix seconds) so the report is scoped to it.
+            if let dict = message.body as? [String: Any], let email = dict["email"] as? String {
+                handleAuthorRequest(email: email,
+                                    since: (dict["since"] as? NSNumber)?.doubleValue,
+                                    until: (dict["until"] as? NSNumber)?.doubleValue)
+            }
+        default: break
+        }
+    }
+
+    /// JS asked for a commit's diff → run `git show` off-thread → render it.
+    private func handleCommitRequest(hash: String) {
         // Fetch off the main thread; git can be slow on big commits.
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
             let diff = self.repo.diff(for: hash)
             DispatchQueue.main.async {
                 let js = "window.renderDiff(\(Self.jsString(hash)), \(Self.jsString(diff)));"
+                self.webView.evaluateJavaScript(js, completionHandler: nil)
+            }
+        }
+    }
+
+    /// JS asked for an author's activity → run `git log --all` off-thread (scoped
+    /// to the loaded graph's date window), encode the report to JSON, and hand it
+    /// to `window.renderAuthor`.
+    private func handleAuthorRequest(email: String, since: Double?, until: Double?) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let activity = self.repo.authorActivity(email: email, since: since, until: until)
+            let json: String
+            if let activity,
+               let data = try? JSONEncoder().encode(activity),
+               let str = String(data: data, encoding: .utf8) {
+                json = str
+            } else {
+                json = "null"
+            }
+            DispatchQueue.main.async {
+                let js = "window.renderAuthor(\(Self.jsString(email)), \(json));"
                 self.webView.evaluateJavaScript(js, completionHandler: nil)
             }
         }

@@ -346,10 +346,28 @@ struct HTMLGenerator {
             min-height: 2px;
             opacity: 0.85;
             transition: opacity 0.1s ease;
+            cursor: pointer;
         }
         .timeline-bar:hover { opacity: 1; }
-        .timeline-bar.empty { background: var(--border-color); opacity: 0.5; }
+        .timeline-bar.empty { background: var(--border-color); opacity: 0.5; cursor: default; }
+        /* When a bar is selected, fade the others so the focused bucket stands out. */
+        .timeline.has-selection .timeline-bar { opacity: 0.35; }
+        .timeline.has-selection .timeline-bar.selected { opacity: 1; }
+        .timeline-bar.selected { box-shadow: 0 0 0 2px var(--bg-color), 0 0 0 3px var(--link-color); }
         .timeline-axis { display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--text-secondary); margin-top: 2px; }
+
+        /* "Filtered to <range>" indicator + clear button above the commit list. */
+        .author-filter {
+            display: flex; align-items: center; gap: 8px;
+            font-size: 0.82rem; color: var(--text-secondary);
+            margin: 2px 0 6px;
+        }
+        .author-filter button {
+            background: var(--code-bg); border: 1px solid var(--border-color);
+            border-radius: 6px; color: var(--text-color);
+            padding: 2px 10px; cursor: pointer; font-size: 0.8rem;
+        }
+        .author-filter button:hover { background: var(--pill-bg); }
 
         /* This author's commits — compact, clickable rows reusing the diff panel. */
         .author-commit {
@@ -772,59 +790,126 @@ struct HTMLGenerator {
 
                 const mine = report.commits;               // newest-first, no merges
                 const times = mine.map(c => c.timestamp);
-                const firstT = Math.min.apply(null, times);
                 const lastT  = Math.max.apply(null, times);
-                const days = new Set(mine.map(c => new Date(c.timestamp * 1000).toDateString()));
+                const firstT = Math.min.apply(null, times);
 
-                let html =
-                    '<div class="stat-grid">' +
-                        statCard(mine.length.toLocaleString(), 'commit' + (mine.length === 1 ? '' : 's')) +
-                        statCard(days.size.toLocaleString(), 'active day' + (days.size === 1 ? '' : 's')) +
-                        statCard(spanLabel(firstT, lastT), 'span') +
-                    '</div>' +
-                    '<div class="stat-share">in the loaded range · first ' +
-                        new Date(firstT * 1000).toLocaleDateString() +
-                        ' · latest ' + new Date(lastT * 1000).toLocaleDateString() +
-                        (report.mergeCount ? ' · ' + report.mergeCount.toLocaleString() +
-                            ' merge' + (report.mergeCount === 1 ? '' : 's') + ' landed' : '') +
-                    '</div>';
-
-                // ---- Timeline ----
-                // Span the loaded graph window (not just the author's first/last
-                // commit) so the bars sit where this author's activity falls within
-                // the visible range, and quiet stretches read as gaps.
+                // The timeline spans the loaded graph window (not just the author's
+                // first/last commit) so the bars sit where this author's activity
+                // falls within the visible range, and quiet stretches read as gaps.
                 const tlSince = (loadedSince && loadedSince <= firstT) ? loadedSince : firstT;
                 const tlUntil = (loadedUntil && loadedUntil >= lastT) ? loadedUntil : lastT;
-                html += '<div class="detail-section-title">Activity</div>' + buildTimeline(times, tlSince, tlUntil);
-
-                // ---- This author's commits ----
-                html += '<div class="detail-section-title">Commits (' + mine.length.toLocaleString() + ')</div>';
-                html += '<div id="author-commits">';
-                mine.forEach(c => {
-                    html +=
-                        '<div class="author-commit" data-hash="' + escapeHTML(c.hash) + '">' +
-                            '<span class="ac-subject">' + escapeHTML(c.subject) + '</span>' +
-                            '<span class="ac-when">' + relativeTime(c.timestamp) + '</span>' +
-                            '<span class="ac-hash">' + escapeHTML(c.shortHash) + '</span>' +
-                        '</div>';
-                });
-                html += '</div>';
 
                 slot.className = '';
-                slot.innerHTML = html;
+                slot.innerHTML =
+                    '<div id="author-stats"></div>' +
+                    '<div class="detail-section-title">Activity</div>' +
+                    buildTimeline(times, tlSince, tlUntil) +
+                    '<div class="detail-section-title">Commits</div>' +
+                    '<div class="author-filter" id="author-filter" style="display:none"></div>' +
+                    '<div id="author-commits"></div>';
 
-                // Clicking one of the author's commits jumps to its full detail —
-                // but only if that commit is actually loaded in the graph (repo-wide
-                // results can include commits outside the loaded window).
-                slot.querySelectorAll('.author-commit').forEach(el => {
-                    const idx = byHash[el.dataset.hash];
-                    if (idx === undefined) {
-                        el.style.cursor = 'default';
-                        el.title = 'Not in the loaded graph';
+                // State for the bucket-drilldown: null = show the whole window.
+                let activeBucket = null;   // { lo, hi, label } or null
+
+                const timelineEl = slot.querySelector('.timeline');
+                const filterEl = slot.querySelector('#author-filter');
+
+                // (Re)render the stats grid + commit list for the current scope.
+                function renderBody() {
+                    const inScope = activeBucket
+                        ? mine.filter(c => c.timestamp >= activeBucket.lo && c.timestamp < activeBucket.hi)
+                        : mine;
+                    const sTimes = inScope.map(c => c.timestamp);
+                    const sFirst = sTimes.length ? Math.min.apply(null, sTimes) : firstT;
+                    const sLast  = sTimes.length ? Math.max.apply(null, sTimes) : lastT;
+                    const sDays = new Set(inScope.map(c => new Date(c.timestamp * 1000).toDateString()));
+
+                    // Stats reflect the current scope; the merge count is whole-window
+                    // (we don't have per-bucket merge data), so only show it unscoped.
+                    let statsHTML =
+                        '<div class="stat-grid">' +
+                            statCard(inScope.length.toLocaleString(), 'commit' + (inScope.length === 1 ? '' : 's')) +
+                            statCard(sDays.size.toLocaleString(), 'active day' + (sDays.size === 1 ? '' : 's')) +
+                            statCard(sTimes.length ? spanLabel(sFirst, sLast) : '—', 'span') +
+                        '</div>';
+                    if (activeBucket) {
+                        statsHTML += '<div class="stat-share">' + escapeHTML(activeBucket.label) + '</div>';
+                    } else {
+                        statsHTML += '<div class="stat-share">in the loaded range · first ' +
+                            new Date(firstT * 1000).toLocaleDateString() +
+                            ' · latest ' + new Date(lastT * 1000).toLocaleDateString() +
+                            (report.mergeCount ? ' · ' + report.mergeCount.toLocaleString() +
+                                ' merge' + (report.mergeCount === 1 ? '' : 's') + ' landed' : '') +
+                            '</div>';
+                    }
+                    slot.querySelector('#author-stats').innerHTML = statsHTML;
+
+                    // Filter chip (only when a bucket is selected).
+                    if (activeBucket) {
+                        filterEl.style.display = '';
+                        filterEl.innerHTML = '<span>Showing ' + escapeHTML(activeBucket.label) + '</span>' +
+                            '<button id="author-filter-clear">Show all</button>';
+                        filterEl.querySelector('#author-filter-clear').addEventListener('click', () => selectBucket(null));
+                    } else {
+                        filterEl.style.display = 'none';
+                        filterEl.innerHTML = '';
+                    }
+
+                    const listEl = slot.querySelector('#author-commits');
+                    if (!inScope.length) {
+                        listEl.innerHTML = '<div class="detail-loading">No commits in this bucket.</div>';
                         return;
                     }
-                    el.addEventListener('click', () => openDetail(idx));
-                });
+                    let rows = '';
+                    inScope.forEach(c => {
+                        rows +=
+                            '<div class="author-commit" data-hash="' + escapeHTML(c.hash) + '">' +
+                                '<span class="ac-subject">' + escapeHTML(c.subject) + '</span>' +
+                                '<span class="ac-when">' + relativeTime(c.timestamp) + '</span>' +
+                                '<span class="ac-hash">' + escapeHTML(c.shortHash) + '</span>' +
+                            '</div>';
+                    });
+                    listEl.innerHTML = rows;
+
+                    // Clicking a commit jumps to its full detail — but only if it's
+                    // actually loaded in the graph (results can include commits on
+                    // refs not loaded when --all wasn't passed at launch).
+                    listEl.querySelectorAll('.author-commit').forEach(el => {
+                        const idx = byHash[el.dataset.hash];
+                        if (idx === undefined) {
+                            el.style.cursor = 'default';
+                            el.title = 'Not in the loaded graph';
+                            return;
+                        }
+                        el.addEventListener('click', () => openDetail(idx));
+                    });
+                }
+
+                // Select a timeline bucket (or null to clear) and re-render.
+                function selectBucket(bucket) {
+                    // Toggle off if the same bucket is clicked again.
+                    if (bucket && activeBucket && bucket.lo === activeBucket.lo) bucket = null;
+                    activeBucket = bucket;
+                    if (timelineEl) {
+                        timelineEl.classList.toggle('has-selection', !!bucket);
+                        timelineEl.querySelectorAll('.timeline-bar').forEach(b => {
+                            b.classList.toggle('selected', !!bucket && +b.dataset.lo === bucket.lo);
+                        });
+                    }
+                    renderBody();
+                }
+
+                // Wire up bar clicks (skip empty buckets — nothing to drill into).
+                if (timelineEl) {
+                    timelineEl.querySelectorAll('.timeline-bar').forEach(b => {
+                        if (b.classList.contains('empty')) return;
+                        b.addEventListener('click', () => selectBucket({
+                            lo: +b.dataset.lo, hi: +b.dataset.hi, label: b.dataset.label
+                        }));
+                    });
+                }
+
+                renderBody();
             };
 
             function statCard(value, label) {
@@ -844,9 +929,10 @@ struct HTMLGenerator {
                 return '1 day';
             }
 
-            // Bucket the author's commit times into ~24 bars spanning their own
-            // first→latest range, so the shape shows when they were active and
-            // their gaps are visible.
+            // Bucket the commit times into ~24 bars spanning [lo, hi], so the shape
+            // shows when the author was active and quiet stretches read as gaps.
+            // Each bar carries its time range (data-lo/data-hi) so clicking it can
+            // scope the panel to that bucket.
             function buildTimeline(times, lo, hi) {
                 const totalSecs = Math.max(1, hi - lo);
 
@@ -861,11 +947,21 @@ struct HTMLGenerator {
                 const peak = Math.max.apply(null, counts) || 1;
 
                 let bars = '<div class="timeline">';
-                counts.forEach(n => {
+                counts.forEach((n, i) => {
+                    const bLo = lo + i * bucketSecs;
+                    // Last bucket's upper edge is inclusive of hi so its commit isn't lost.
+                    const bHi = (i === BUCKETS - 1) ? hi + 1 : lo + (i + 1) * bucketSecs;
+                    const loStr = new Date(bLo * 1000).toLocaleDateString();
+                    const hiStr = new Date((bHi - 1) * 1000).toLocaleDateString();
+                    const range = (loStr === hiStr) ? loStr : (loStr + ' – ' + hiStr);
+                    const label = n + ' commit' + (n === 1 ? '' : 's') + ' · ' + range;
                     const h = n === 0 ? 0 : Math.round((n / peak) * 100);
                     const cls = n === 0 ? 'timeline-bar empty' : 'timeline-bar';
-                    const title = n + ' commit' + (n === 1 ? '' : 's');
-                    bars += '<div class="' + cls + '" style="height:' + Math.max(h, n ? 6 : 4) + '%" title="' + title + '"></div>';
+                    bars += '<div class="' + cls + '"' +
+                        ' style="height:' + Math.max(h, n ? 6 : 4) + '%"' +
+                        ' data-lo="' + Math.floor(bLo) + '" data-hi="' + Math.ceil(bHi) + '"' +
+                        ' data-label="' + escapeHTML(label) + '"' +
+                        ' title="' + escapeHTML(label) + '"></div>';
                 });
                 bars += '</div>';
 

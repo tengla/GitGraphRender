@@ -186,6 +186,9 @@ struct HTMLGenerator {
         }
 
         .row-author { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        /* The author name is clickable: it opens the author-activity panel. */
+        .row-author { cursor: pointer; border-radius: 4px; padding: 0 3px; margin: 0 -3px; }
+        .row-author:hover { color: var(--link-color); background: var(--pill-bg); }
 
         /* Ref pills (branches, tags, HEAD) shown before the subject. */
         .ref-pill {
@@ -312,6 +315,52 @@ struct HTMLGenerator {
         .detail-diff .meta { color: var(--text-secondary); font-weight: 600; }
         .detail-loading { color: var(--text-secondary); font-style: italic; }
         .detail-section-title { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-secondary); margin: 18px 0 8px; font-weight: 600; }
+
+        /* Author-activity panel */
+        .author-head { display: flex; align-items: center; gap: 12px; margin: 0 32px 4px 0; }
+        .author-avatar {
+            flex: 0 0 auto;
+            width: 40px; height: 40px;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            color: #fff; font-weight: 700; font-size: 1.1rem;
+            text-transform: uppercase;
+        }
+        .author-name { font-size: 1.2rem; font-weight: 600; line-height: 1.2; }
+        .author-email { font-size: 0.82rem; color: var(--text-secondary); }
+
+        /* Stat cards: commit count, active days, date span. */
+        .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 16px 0 4px; }
+        .stat-card { background: var(--code-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 14px; }
+        .stat-value { font-size: 1.4rem; font-weight: 700; line-height: 1.1; }
+        .stat-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-secondary); margin-top: 4px; }
+        .stat-share { font-size: 0.82rem; color: var(--text-secondary); margin-top: 10px; }
+
+        /* Activity timeline — a row of bars, one per bucket (week or day). */
+        .timeline { display: flex; align-items: flex-end; gap: 2px; height: 72px; margin: 6px 0 2px; }
+        .timeline-bar {
+            flex: 1 1 0;
+            min-width: 2px;
+            background: var(--link-color);
+            border-radius: 2px 2px 0 0;
+            min-height: 2px;
+            opacity: 0.85;
+            transition: opacity 0.1s ease;
+        }
+        .timeline-bar:hover { opacity: 1; }
+        .timeline-bar.empty { background: var(--border-color); opacity: 0.5; }
+        .timeline-axis { display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--text-secondary); margin-top: 2px; }
+
+        /* This author's commits — compact, clickable rows reusing the diff panel. */
+        .author-commit {
+            display: flex; align-items: baseline; gap: 10px;
+            padding: 6px 8px; border-radius: 6px; cursor: pointer;
+            border-bottom: 1px solid transparent;
+        }
+        .author-commit:hover { background: var(--row-hover); }
+        .author-commit .ac-subject { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .author-commit .ac-when { flex: 0 0 auto; color: var(--text-secondary); font-size: 0.8rem; }
+        .author-commit .ac-hash { flex: 0 0 auto; font-family: "SF Mono", SFMono-Regular, ui-monospace, Menlo, monospace; font-size: 0.76rem; color: var(--text-secondary); }
 
         /* Search bar (mirrors MarkdownRender's slide-down find bar) */
         #search-bar {
@@ -528,13 +577,19 @@ struct HTMLGenerator {
                     pills +
                     '<span class="row-subject">' + escapeHTML(c.subject) + '</span>' +
                     '<span class="row-meta">' +
-                        '<span class="row-author">' + escapeHTML(c.authorName) + '</span>' +
+                        '<span class="row-author" title="See ' + escapeHTML(c.authorName) + '\\u2019s activity">' + escapeHTML(c.authorName) + '</span>' +
                         '<span>' + relativeTime(c.timestamp) + '</span>' +
                         '<span class="row-hash">' + escapeHTML(c.shortHash) + '</span>' +
                     '</span>';
                 row.appendChild(info);
 
-                // Interactions.
+                // Interactions. Clicking the author name opens the author panel
+                // (and is stopped from also opening the commit detail below it).
+                const authorEl = info.querySelector('.row-author');
+                authorEl.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    openAuthor(c.authorEmail || c.authorName);
+                });
                 row.addEventListener('click', () => openDetail(i));
                 row.addEventListener('mouseenter', (e) => showTooltip(e, c));
                 row.addEventListener('mousemove', moveTooltip);
@@ -617,6 +672,149 @@ struct HTMLGenerator {
                 panel.classList.remove('open');
                 backdrop.classList.remove('open');
                 if (selectedRow) { selectedRow.classList.remove('selected'); selectedRow = null; }
+            }
+
+            // ---- Author activity panel ----
+            // Reuses the same slide-in panel. Everything is computed from the
+            // commits already in GRAPH_DATA — the "time frame" is exactly the
+            // range currently loaded in the graph (newest..oldest shown), so no
+            // extra git calls are needed and it works fully offline.
+
+            // Group commits by author identity once. We key on email when present
+            // (stable across name spelling changes) and fall back to the name.
+            function authorKey(c) { return (c.authorEmail || c.authorName || '').toLowerCase(); }
+
+            // Eight palette hues, used to give each author a stable avatar color.
+            function colorForKey(key) {
+                let h = 0;
+                for (let i = 0; i < key.length; i++) { h = (h * 31 + key.charCodeAt(i)) >>> 0; }
+                return laneColor(h % 8);
+            }
+
+            function openAuthor(identity) {
+                const key = String(identity || '').toLowerCase();
+                const mine = commits.filter(c => authorKey(c) === key);
+                if (!mine.length) return;
+
+                // Clear any commit-row selection — this is an author view, not a commit.
+                if (selectedRow) { selectedRow.classList.remove('selected'); selectedRow = null; }
+
+                // Newest-first is how commits are already ordered; for stats we want
+                // the actual time bounds across this author's commits.
+                const times = mine.map(c => c.timestamp);
+                const firstT = Math.min.apply(null, times);   // oldest commit
+                const lastT  = Math.max.apply(null, times);   // newest commit
+                const name = mine[0].authorName;
+                const email = mine[0].authorEmail;
+
+                // Active days: distinct local calendar days they committed on.
+                const days = new Set(mine.map(c => new Date(c.timestamp * 1000).toDateString()));
+
+                // Share of the loaded history.
+                const sharePct = Math.round((mine.length / commits.length) * 100);
+
+                const initials = (name || email || '?').trim().charAt(0);
+                const accent = colorForKey(key);
+
+                let html =
+                    '<div class="author-head">' +
+                        '<div class="author-avatar" style="background:' + accent + '">' + escapeHTML(initials) + '</div>' +
+                        '<div>' +
+                            '<div class="author-name">' + escapeHTML(name) + '</div>' +
+                            (email ? '<div class="author-email">' + escapeHTML(email) + '</div>' : '') +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="stat-grid">' +
+                        statCard(mine.length.toLocaleString(), 'commit' + (mine.length === 1 ? '' : 's')) +
+                        statCard(days.size.toLocaleString(), 'active day' + (days.size === 1 ? '' : 's')) +
+                        statCard(spanLabel(firstT, lastT), 'span') +
+                    '</div>' +
+                    '<div class="stat-share">' + sharePct + '% of the ' + commits.length.toLocaleString() +
+                        ' commit' + (commits.length === 1 ? '' : 's') + ' loaded · ' +
+                        'first ' + new Date(firstT * 1000).toLocaleDateString() +
+                        ' · latest ' + new Date(lastT * 1000).toLocaleDateString() + '</div>';
+
+                // ---- Timeline ----
+                html += '<div class="detail-section-title">Activity</div>' + buildTimeline(times);
+
+                // ---- This author's commits ----
+                html += '<div class="detail-section-title">Commits (' + mine.length.toLocaleString() + ')</div>';
+                html += '<div id="author-commits">';
+                mine.forEach(c => {
+                    html +=
+                        '<div class="author-commit" data-hash="' + escapeHTML(c.hash) + '">' +
+                            '<span class="ac-subject">' + escapeHTML(c.subject) + '</span>' +
+                            '<span class="ac-when">' + relativeTime(c.timestamp) + '</span>' +
+                            '<span class="ac-hash">' + escapeHTML(c.shortHash) + '</span>' +
+                        '</div>';
+                });
+                html += '</div>';
+
+                content.innerHTML = html;
+
+                // Clicking one of the author's commits jumps to its full detail.
+                content.querySelectorAll('.author-commit').forEach(el => {
+                    el.addEventListener('click', () => {
+                        const idx = byHash[el.dataset.hash];
+                        if (idx !== undefined) openDetail(idx);
+                    });
+                });
+
+                panel.classList.add('open');
+                backdrop.classList.add('open');
+            }
+
+            function statCard(value, label) {
+                return '<div class="stat-card"><div class="stat-value">' + escapeHTML(String(value)) +
+                    '</div><div class="stat-label">' + escapeHTML(label) + '</div></div>';
+            }
+
+            // A compact human label for the time between first and last commit.
+            function spanLabel(firstT, lastT) {
+                const secs = Math.max(0, lastT - firstT);
+                if (secs < 86400) return '1 day';
+                const units = [['yr', 31536000], ['mo', 2592000], ['wk', 604800], ['day', 86400]];
+                for (const [name, u] of units) {
+                    const v = Math.floor(secs / u);
+                    if (v >= 1) return v + ' ' + name + (v === 1 ? '' : 's');
+                }
+                return '1 day';
+            }
+
+            // Bucket the author's commit times into ~24 bars spanning the loaded
+            // history (so multiple authors line up on the same axis). Buckets are
+            // by week when the loaded range is long, by day when it's short.
+            function buildTimeline(times) {
+                // Span the whole loaded graph, not just this author, so the bars
+                // are comparable and the author's gaps are visible.
+                const allTimes = commits.map(c => c.timestamp);
+                const lo = Math.min.apply(null, allTimes);
+                const hi = Math.max.apply(null, allTimes);
+                const totalSecs = Math.max(1, hi - lo);
+
+                const BUCKETS = 24;
+                const bucketSecs = totalSecs / BUCKETS;
+                const counts = new Array(BUCKETS).fill(0);
+                times.forEach(t => {
+                    let b = Math.floor((t - lo) / bucketSecs);
+                    if (b < 0) b = 0; if (b >= BUCKETS) b = BUCKETS - 1;
+                    counts[b]++;
+                });
+                const peak = Math.max.apply(null, counts) || 1;
+
+                let bars = '<div class="timeline">';
+                counts.forEach(n => {
+                    const h = n === 0 ? 0 : Math.round((n / peak) * 100);
+                    const cls = n === 0 ? 'timeline-bar empty' : 'timeline-bar';
+                    const title = n + ' commit' + (n === 1 ? '' : 's');
+                    bars += '<div class="' + cls + '" style="height:' + Math.max(h, n ? 6 : 4) + '%" title="' + title + '"></div>';
+                });
+                bars += '</div>';
+
+                const axis = '<div class="timeline-axis"><span>' +
+                    new Date(lo * 1000).toLocaleDateString() + '</span><span>' +
+                    new Date(hi * 1000).toLocaleDateString() + '</span></div>';
+                return bars + axis;
             }
 
             // Called by Swift once `git show` returns. Renders a lightly colorized diff.

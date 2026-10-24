@@ -70,12 +70,12 @@ struct HTMLGenerator {
 
         @media (prefers-color-scheme: dark) {
             :root {
-                --diff-add-bg: rgba(46, 160, 67, 0.15);
-                --diff-add-num: rgba(63, 185, 80, 0.3);
-                --diff-add-word: rgba(46, 160, 67, 0.4);
-                --diff-del-bg: rgba(248, 81, 73, 0.1);
-                --diff-del-num: rgba(248, 81, 73, 0.3);
-                --diff-del-word: rgba(248, 81, 73, 0.4);
+                --diff-add-bg: rgba(46, 160, 67, 0.22);
+                --diff-add-num: rgba(63, 185, 80, 0.35);
+                --diff-add-word: rgba(63, 185, 80, 0.55);
+                --diff-del-bg: rgba(248, 81, 73, 0.18);
+                --diff-del-num: rgba(248, 81, 73, 0.35);
+                --diff-del-word: rgba(248, 81, 73, 0.55);
                 --diff-hunk-bg: rgba(56, 139, 253, 0.1);
                 --diff-empty-bg: #161b22;
                 --bg-color: #0d1117;
@@ -320,8 +320,8 @@ struct HTMLGenerator {
         }
         .detail-diff {
             font-family: "SF Mono", SFMono-Regular, ui-monospace, Menlo, monospace;
-            font-size: 0.78rem;
-            line-height: 1.45;
+            font-size: 0.95rem;
+            line-height: 1.6;
             white-space: pre;
             overflow-x: auto;
             background: var(--code-bg);
@@ -351,17 +351,18 @@ struct HTMLGenerator {
         .diff-toggle button + button { border-left: 1px solid var(--border-color); }
         .diff-toggle button.active { background: var(--code-bg); color: var(--text-color); font-weight: 600; }
         .diff-preamble { margin-bottom: 14px; }
+        .diff-summary { color: var(--text-secondary); font-size: 0.95rem; margin-bottom: 12px; }
         .diff-file { border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 14px; overflow: hidden; }
         .diff-file > summary {
             list-style: none;
             display: flex;
             align-items: center;
             gap: 8px;
-            padding: 7px 12px;
+            padding: 9px 12px;
             background: var(--code-bg);
             border-bottom: 1px solid var(--border-color);
             font-family: "SF Mono", SFMono-Regular, ui-monospace, Menlo, monospace;
-            font-size: 0.8rem;
+            font-size: 0.95rem;
             cursor: pointer;
             user-select: none;
         }
@@ -370,8 +371,8 @@ struct HTMLGenerator {
         .diff-file[open] > summary::before { transform: rotate(90deg); }
         .diff-file:not([open]) > summary { border-bottom: none; }
         .diff-file-name { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
-        .diff-file-status { font-size: 0.7rem; padding: 0 6px; border-radius: 4px; background: var(--pill-bg); color: var(--text-secondary); font-weight: 600; }
-        .diff-file-counts { white-space: nowrap; font-size: 0.75rem; }
+        .diff-file-status { font-size: 0.8rem; padding: 0 6px; border-radius: 4px; background: var(--pill-bg); color: var(--text-secondary); font-weight: 600; }
+        .diff-file-counts { white-space: nowrap; font-size: 0.9rem; font-weight: 600; }
         .diff-file-counts .add { color: var(--lane-1); }
         .diff-file-counts .del { color: var(--lane-7); margin-left: 4px; }
         .diff-file-note { padding: 10px 12px; color: var(--text-secondary); font-style: italic; font-size: 0.85rem; }
@@ -380,11 +381,11 @@ struct HTMLGenerator {
             border-collapse: collapse;
             table-layout: fixed;
             font-family: "SF Mono", SFMono-Regular, ui-monospace, Menlo, monospace;
-            font-size: 0.76rem;
-            line-height: 1.5;
+            font-size: 0.95rem;
+            line-height: 1.6;
         }
-        .diff-table col.c-num { width: 4.2em; }
-        .diff-table td { padding: 0 8px; vertical-align: top; }
+        .diff-table col.c-num { width: 3.8em; }
+        .diff-table td { padding: 1px 10px; vertical-align: top; }
         .diff-table td.num { text-align: right; color: var(--text-secondary); user-select: none; }
         .diff-table td.code { white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
         .diff-table.split td.code.old { border-right: 1px solid var(--border-color); }
@@ -395,7 +396,10 @@ struct HTMLGenerator {
         .diff-table td.d-empty { background: var(--diff-empty-bg); }
         .diff-table td.d-add .hl { background: var(--diff-add-word); border-radius: 2px; }
         .diff-table td.d-del .hl { background: var(--diff-del-word); border-radius: 2px; }
-        .diff-table .sign { user-select: none; color: var(--text-secondary); }
+        /* +/− markers, so changes don't rely on telling red from green. */
+        .diff-table .sign { user-select: none; color: var(--text-secondary); font-weight: 700; padding-right: 8px; }
+        .diff-table td.d-add .sign { color: var(--lane-1); }
+        .diff-table td.d-del .sign { color: var(--lane-7); }
         .diff-table tr.d-hunk td { background: var(--diff-hunk-bg); color: var(--text-secondary); padding: 3px 8px; }
         .diff-table tr.d-note td { color: var(--text-secondary); font-style: italic; padding: 3px 8px; }
         .diff-table .nonl { color: var(--lane-7); margin-left: 4px; user-select: none; }
@@ -1197,19 +1201,59 @@ struct HTMLGenerator {
                 return chunks;
             }
 
-            // Highlights the differing middle of a changed line pair (common
-            // prefix/suffix trimmed). Skipped when the lines barely overlap.
+            // Splits a line into words, runs of whitespace, and single punctuation
+            // characters. Non-ASCII counts as a word character (æøå, etc.).
+            function isWordChar(ch) { return ch.charCodeAt(0) > 127 || /[A-Za-z0-9_]/.test(ch); }
+            function isSpace(ch) { return ch === ' ' || ch === '\\t'; }
+            function tokenize(s) {
+                const out = [];
+                let i = 0;
+                while (i < s.length) {
+                    let j = i + 1;
+                    if (isWordChar(s[i])) { while (j < s.length && isWordChar(s[j])) j++; }
+                    else if (isSpace(s[i])) { while (j < s.length && isSpace(s[j])) j++; }
+                    out.push(s.slice(i, j));
+                    i = j;
+                }
+                return out;
+            }
+
+            // Highlights the words that differ between a changed line pair, using
+            // a longest-common-subsequence over word tokens. Skipped when the
+            // lines are mostly rewritten, where highlights would just be noise.
             function inlineDiff(a, b) {
-                const max = Math.min(a.length, b.length);
-                let p = 0;
-                while (p < max && a[p] === b[p]) p++;
-                let s = 0;
-                while (s < max - p && a[a.length - 1 - s] === b[b.length - 1 - s]) s++;
-                if (p + s < Math.max(3, max * 0.25)) return null;
-                const mark = str => escapeHTML(str.slice(0, p)) +
-                    '<span class="hl">' + escapeHTML(str.slice(p, str.length - s)) + '</span>' +
-                    escapeHTML(str.slice(str.length - s));
-                return [mark(a), mark(b)];
+                const ta = tokenize(a), tb = tokenize(b);
+                const n = ta.length, m = tb.length;
+                if (!n || !m || n * m > 40000) return null;
+                const dp = [];
+                for (let i = 0; i <= n; i++) dp.push(new Uint16Array(m + 1));
+                for (let i = n - 1; i >= 0; i--) {
+                    for (let j = m - 1; j >= 0; j--) {
+                        dp[i][j] = ta[i] === tb[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+                    }
+                }
+                const keepA = new Array(n).fill(false), keepB = new Array(m).fill(false);
+                let i = 0, j = 0, same = 0;
+                while (i < n && j < m) {
+                    if (ta[i] === tb[j]) {
+                        keepA[i] = keepB[j] = true;
+                        if (ta[i].trim()) same += ta[i].length;
+                        i++; j++;
+                    } else if (dp[i + 1][j] >= dp[i][j + 1]) i++;
+                    else j++;
+                }
+                const visible = toks => toks.reduce((sum, t) => sum + (t.trim() ? t.length : 0), 0);
+                if (same < 0.4 * Math.max(visible(ta), visible(tb))) return null;
+                const mark = (toks, keep) => {
+                    let html = '', open = false;
+                    toks.forEach((t, k) => {
+                        if (!keep[k] && !open) { html += '<span class="hl">'; open = true; }
+                        if (keep[k] && open) { html += '</span>'; open = false; }
+                        html += escapeHTML(t);
+                    });
+                    return html + (open ? '</span>' : '');
+                };
+                return [mark(ta, keepA), mark(tb, keepB)];
             }
 
             // HTML for each side of a change block, with inline highlights on pairs.
@@ -1231,11 +1275,13 @@ struct HTMLGenerator {
                 return line.nonl ? '<span class="nonl" title="No newline at end of file">&#8856;</span>' : '';
             }
 
+            function sign(ch) { return '<span class="sign">' + ch + '</span>'; }
+
             function splitRows(hunk) {
                 let html = '<tr class="d-hunk"><td colspan="4">' + escapeHTML(hunk.header) + '</td></tr>';
                 hunkChunks(hunk).forEach(ch => {
                     if (ch.t === 'ctx') {
-                        const code = escapeHTML(ch.line.s) + nonl(ch.line);
+                        const code = sign(' ') + escapeHTML(ch.line.s) + nonl(ch.line);
                         html += '<tr><td class="num">' + ch.oldNo + '</td><td class="code old">' + code +
                                 '</td><td class="num">' + ch.newNo + '</td><td class="code">' + code + '</td></tr>';
                     } else if (ch.t === 'note') {
@@ -1243,9 +1289,9 @@ struct HTMLGenerator {
                     } else {
                         changeCells(ch).forEach(r => {
                             html += '<tr>' +
-                                (r.del ? '<td class="num d-del">' + r.del.no + '</td><td class="code old d-del">' + r.del.html + '</td>'
+                                (r.del ? '<td class="num d-del">' + r.del.no + '</td><td class="code old d-del">' + sign('-') + r.del.html + '</td>'
                                        : '<td class="num d-empty"></td><td class="code old d-empty"></td>') +
-                                (r.add ? '<td class="num d-add">' + r.add.no + '</td><td class="code d-add">' + r.add.html + '</td>'
+                                (r.add ? '<td class="num d-add">' + r.add.no + '</td><td class="code d-add">' + sign('+') + r.add.html + '</td>'
                                        : '<td class="num d-empty"></td><td class="code d-empty"></td>') +
                                 '</tr>';
                         });
@@ -1256,9 +1302,9 @@ struct HTMLGenerator {
 
             function unifiedRows(hunk) {
                 let html = '<tr class="d-hunk"><td colspan="3">' + escapeHTML(hunk.header) + '</td></tr>';
-                const row = (cls, oldNo, newNo, sign, code) =>
+                const row = (cls, oldNo, newNo, mark, code) =>
                     '<tr><td class="num ' + cls + '">' + oldNo + '</td><td class="num ' + cls + '">' + newNo +
-                    '</td><td class="code ' + cls + '"><span class="sign">' + sign + '</span>' + code + '</td></tr>';
+                    '</td><td class="code ' + cls + '">' + sign(mark) + code + '</td></tr>';
                 hunkChunks(hunk).forEach(ch => {
                     if (ch.t === 'ctx') {
                         html += row('', ch.oldNo, ch.newNo, ' ', escapeHTML(ch.line.s) + nonl(ch.line));
@@ -1274,9 +1320,16 @@ struct HTMLGenerator {
             }
 
             function renderDiffHTML(diff, mode) {
-                let html = diff.preamble
-                    ? '<div class="detail-diff diff-preamble">' + colorizeDiff(diff.preamble) + '</div>'
-                    : '';
+                // The commit header and message are already shown above, so just
+                // summarize ("3 files changed, …"). With no patch (e.g. a clean
+                // merge) the full --stat is all there is, so show that instead.
+                const summary = diff.preamble.split('\\n').find(l => l.indexOf(' changed') >= 0);
+                let html = '';
+                if (!diff.files.length && diff.preamble) {
+                    html = '<div class="detail-diff diff-preamble">' + colorizeDiff(diff.preamble) + '</div>';
+                } else if (summary) {
+                    html = '<div class="diff-summary">' + escapeHTML(summary.trim()) + '</div>';
+                }
                 diff.files.forEach(f => {
                     html += '<details class="diff-file" open><summary>' +
                         (f.status ? '<span class="diff-file-status">' + f.status + '</span>' : '') +

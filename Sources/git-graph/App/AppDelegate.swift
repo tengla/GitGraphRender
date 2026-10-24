@@ -80,6 +80,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
         webView = WKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
+        if let zoom = UserDefaults.standard.object(forKey: Self.zoomKey) as? Double {
+            webView.pageZoom = zoom
+        }
         window.contentView = webView
     }
 
@@ -235,9 +238,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         webView.evaluateJavaScript("window.gitGraph && window.gitGraph.openSearch();", completionHandler: nil)
     }
 
-    @objc private func resetZoom() { webView.pageZoom = 1.0 }
-    @objc private func zoomIn() { webView.pageZoom += 0.1 }
-    @objc private func zoomOut() { webView.pageZoom = max(0.5, webView.pageZoom - 0.1) }
+    // Zoom is remembered across launches, so it only has to be set once.
+    private static let zoomKey = "pageZoom"
+    @objc private func resetZoom() { setZoom(1.0) }
+    @objc private func zoomIn() { setZoom(min(3.0, webView.pageZoom + 0.1)) }
+    @objc private func zoomOut() { setZoom(max(0.5, webView.pageZoom - 0.1)) }
+    private func setZoom(_ zoom: Double) {
+        webView.pageZoom = zoom
+        UserDefaults.standard.set(zoom, forKey: Self.zoomKey)
+    }
 
     // MARK: - Watch mode
 

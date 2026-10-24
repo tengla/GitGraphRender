@@ -1,5 +1,9 @@
 import Foundation
 
+// The page's CSS and JS live here as Swift string literals (no bundled resources,
+// fully offline), so this file is long and has long lines by design.
+// swiftlint:disable file_length type_body_length function_body_length line_length
+
 /// Builds the HTML/CSS/JS rendered inside the WebView.
 ///
 /// The Swift side ships a `GraphData` JSON blob plus a self-contained script that
@@ -1523,3 +1527,5 @@ private extension String {
             .replacingOccurrences(of: ">", with: "&gt;")
     }
 }
+
+// swiftlint:enable type_body_length function_body_length line_length

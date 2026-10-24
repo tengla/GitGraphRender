@@ -95,7 +95,14 @@ height, dot radius) live at the top of `generateJS()`.
 
 ## Testing / verifying changes
 
-The graph rendering can be verified headlessly without opening a window:
+Run the test suite (Swift Testing, `Tests/git-graphTests/`) with `swift test`
+or `task test`. It builds the package, runs the real `git-graph` binary for its
+CLI paths (help, option validation, not-a-repo), exercises `GitRepository` and
+`GraphLayout` against throwaway repos, and parses the embedded JS with
+JavaScriptCore — which catches broken `\\` escapes in `HTMLGenerator`'s Swift
+string literals. Nothing in it opens a window.
+
+The graph rendering can also be verified headlessly without opening a window:
 
 1. Build a repo with branches and a merge (so lanes/merges are exercised), e.g.
    `git init`, a couple of commits, a feature branch, a `--no-ff` merge, a tag.

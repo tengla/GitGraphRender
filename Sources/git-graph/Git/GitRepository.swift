@@ -329,7 +329,8 @@ struct GitRepository {
 
         guard process.terminationStatus == 0 else {
             let message = String(data: errData, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? "git exited with status \(process.terminationStatus)"
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                ?? "git exited with status \(process.terminationStatus)"
             throw GitError.commandFailed(message)
         }
 

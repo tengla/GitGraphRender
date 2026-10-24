@@ -27,6 +27,9 @@ enum GraphLayout {
     /// Number of distinct colors lanes cycle through (see the palette in CSS/JS).
     static let colorCount = 8
 
+    // Long and branchy for lint's taste, but one sweep plus a post-pass reads best
+    // kept together top to bottom.
+    // swiftlint:disable cyclomatic_complexity function_body_length
     /// - Returns: the commits with `lane`, `color`, and `parentLanes` filled in,
     ///   plus the total number of lanes used (the widest point), for SVG sizing.
     static func assign(_ input: [Commit]) -> (commits: [Commit], totalLanes: Int) {
@@ -134,4 +137,5 @@ enum GraphLayout {
 
         return (commits, max(maxLanes, 1))
     }
+    // swiftlint:enable cyclomatic_complexity function_body_length
 }

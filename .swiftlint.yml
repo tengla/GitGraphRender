@@ -1,0 +1,17 @@
+# Lint only our own code — not .build/ (dependency checkouts, SwiftPM's
+# generated test runner).
+included:
+  - Sources
+  - Tests
+excluded:
+  - .build
+
+disabled_rules:
+  # Prefers the failable String(data:encoding:), but git output is decoded with
+  # the lossy String(decoding:as:) on purpose: a patch touching a non-UTF-8 file
+  # must not blank the whole diff (see GitRepository.run).
+  - optional_data_string_conversion
+
+# Short names (i, c, js, fd) are idiomatic for loop indices and closure params.
+identifier_name:
+  min_length: 1

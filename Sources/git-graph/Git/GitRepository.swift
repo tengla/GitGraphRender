@@ -12,11 +12,14 @@ struct GitRepository {
         case notARepository(String)
         case gitNotFound
         case commandFailed(String)
+        case unknownRevision(String)
 
         var errorDescription: String? {
             switch self {
             case .notARepository(let path):
                 return "Not a git repository: \(path)"
+            case .unknownRevision(let revision):
+                return "Unknown revision: \(revision)"
             case .gitNotFound:
                 return "The `git` command was not found. Install the Xcode command-line tools or Git."
             case .commandFailed(let message):
@@ -56,6 +59,13 @@ struct GitRepository {
     private static let fieldSep = "\u{1f}"   // between fields of one record
     private static let recordSep = "\u{1e}"  // between records (commits)
 
+    /// `--pretty` format read by `parseLog`: %H hash, %h short, %P parents,
+    /// %an author, %ae email, %at unix time, %s subject, %b body, %D ref names.
+    /// Order matters — parsing relies on it.
+    private static let logFormat = [
+        "%H", "%h", "%P", "%an", "%ae", "%at", "%s", "%b", "%D"
+    ].joined(separator: fieldSep) + recordSep
+
     /// Runs one `git log` and parses it into commits (no lane info yet).
     ///
     /// - Parameters:
@@ -63,18 +73,12 @@ struct GitRepository {
     ///   - allBranches: when true, include every ref (`--all`); otherwise just
     ///     what's reachable from HEAD.
     func loadCommits(maxCount: Int, allBranches: Bool) throws -> (commits: [Commit], totalCount: Int) {
-        // %H hash, %h short, %P parents, %an author, %ae email, %at unix time,
-        // %s subject, %b body, %D ref names. Order matters — parsing relies on it.
-        let format = [
-            "%H", "%h", "%P", "%an", "%ae", "%at", "%s", "%b", "%D"
-        ].joined(separator: Self.fieldSep) + Self.recordSep
-
         // --topo-order is essential, not cosmetic: the lane algorithm in
         // GraphLayout requires every commit to be emitted before any of its
         // parents. Plain date order violates that when commits share timestamps
         // (or when clocks are skewed across machines), which corrupts merge edges.
         var args = ["-C", topLevel.path, "log",
-                    "--pretty=format:\(format)",
+                    "--pretty=format:\(Self.logFormat)",
                     "--topo-order",
                     "-z",                       // NUL-terminate records too (belt and suspenders)
                     "--max-count=\(maxCount)"]
@@ -98,6 +102,32 @@ struct GitRepository {
         let commits = Self.parseLog(raw)
         let total = (try? countCommits(allBranches: allBranches)) ?? commits.count
         return (commits, max(total, commits.count))
+    }
+
+    /// Resolves any revision git understands (full or short SHA, branch, tag,
+    /// `HEAD~2`, `main@{yesterday}`, …) to its commit, the way `git show <rev>`
+    /// does. Works for commits outside the loaded graph too. Throws
+    /// `unknownRevision` when git can't resolve it.
+    func commit(for revision: String) throws -> Commit {
+        let revision = revision.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A leading "-" would be read as an option; --end-of-options guards git
+        // itself, this keeps the error message sensible.
+        guard !revision.isEmpty, !revision.hasPrefix("-") else {
+            throw GitError.unknownRevision(revision)
+        }
+        let args = ["-C", topLevel.path, "log", "-1",
+                    "--pretty=format:\(Self.logFormat)", "-z",
+                    "--end-of-options", revision + "^{commit}", "--"]
+        let raw: String
+        do {
+            raw = try Self.run(args, workingDirectory: topLevel)
+        } catch GitError.commandFailed {
+            throw GitError.unknownRevision(revision)
+        }
+        guard let commit = Self.parseLog(raw).first else {
+            throw GitError.unknownRevision(revision)
+        }
+        return commit
     }
 
     /// Total number of commits, so the UI can say "showing 500 of 4,213".

@@ -339,6 +339,46 @@ struct HTMLGenerator {
         .detail-loading { color: var(--text-secondary); font-style: italic; }
         .detail-section-title { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-secondary); margin: 18px 0 8px; font-weight: 600; }
 
+        /* "git show <revision>" bar at the top of the commit panel. */
+        .rev-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 0 40px 16px 0;   /* clear the close button */
+            font-family: "SF Mono", SFMono-Regular, ui-monospace, Menlo, monospace;
+            font-size: 0.95rem;
+        }
+        .rev-label { color: var(--text-secondary); white-space: nowrap; }
+        .rev-bar input {
+            flex: 1;
+            min-width: 0;
+            font: inherit;
+            padding: 5px 9px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--code-bg);
+            color: var(--text-color);
+        }
+        .rev-bar input:focus { outline: 2px solid var(--link-color); outline-offset: -1px; }
+        .rev-bar button {
+            font: inherit;
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            font-size: 0.85rem;
+            padding: 5px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--code-bg);
+            color: var(--text-color);
+            cursor: pointer;
+        }
+        .rev-error { color: var(--lane-7); font-size: 0.9rem; margin: -8px 0 12px; }
+        .rev-error:empty { display: none; }
+        .rev-hint { color: var(--text-secondary); font-size: 0.95rem; line-height: 1.6; }
+        .rev-hint .mono { font-family: "SF Mono", SFMono-Regular, ui-monospace, Menlo, monospace; color: var(--text-color); }
+        .rev-note { color: var(--text-secondary); font-size: 0.85rem; font-style: italic; margin: -6px 0 12px; }
+        .rev-link, .detail-table .rev-link { color: var(--link-color); cursor: pointer; text-decoration: none; }
+        .rev-link:hover { text-decoration: underline; }
+
         /* Diff view: per-file blocks, drawn split (old | new) or unified. */
         .diff-header { display: flex; align-items: center; justify-content: space-between; margin: 18px 0 8px; }
         .diff-header .detail-section-title { margin: 0; }
@@ -736,11 +776,19 @@ struct HTMLGenerator {
             document.getElementById('detail-close').addEventListener('click', closeDetail);
             backdrop.addEventListener('click', closeDetail);
 
-            function openDetail(index) {
-                const c = commits[index];
+            function openDetail(index) { openCommit(commits[index]); }
+
+            // Shows a commit in the panel. `c` may come from the loaded graph or
+            // from a `git show` lookup of a commit the graph doesn't contain.
+            function openCommit(c, scrollIntoView) {
+                const index = byHash[c.hash];
                 if (selectedRow) selectedRow.classList.remove('selected');
-                selectedRow = list.querySelector('.commit-row[data-index="' + index + '"]');
-                if (selectedRow) selectedRow.classList.add('selected');
+                selectedRow = index === undefined ? null
+                    : list.querySelector('.commit-row[data-index="' + index + '"]');
+                if (selectedRow) {
+                    selectedRow.classList.add('selected');
+                    if (scrollIntoView) selectedRow.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                }
 
                 const date = new Date(c.timestamp * 1000);
                 let refsHTML = '';
@@ -753,14 +801,19 @@ struct HTMLGenerator {
                 });
 
                 content.innerHTML =
+                    revisionBarHTML(c.shortHash) +
+                    (index === undefined ? '<div class="rev-note">Not in the loaded graph ' +
+                        '(older than the commits shown, or on a branch not loaded without --all).</div>' : '') +
                     '<div class="detail-subject">' + escapeHTML(c.subject) + '</div>' +
                     (refsHTML ? '<div style="margin-bottom:12px">' + refsHTML + '</div>' : '') +
                     '<div class="detail-table">' +
                         '<div><span class="mono">' + escapeHTML(c.hash) + '</span></div>' +
                         '<div>' + escapeHTML(c.authorName) + ' &lt;' + escapeHTML(c.authorEmail) + '&gt;</div>' +
                         '<div>' + date.toLocaleString() + '</div>' +
-                        (c.parents.length ? '<div>parents: <span class="mono">' +
-                            c.parents.map(p => escapeHTML(p.substring(0, 7))).join(', ') + '</span></div>' : '<div>root commit</div>') +
+                        (c.parents.length ? '<div>parents: ' +
+                            c.parents.map(p => '<a class="rev-link mono" data-rev="' + escapeHTML(p) + '" title="git show ' +
+                                escapeHTML(p.substring(0, 7)) + '">' + escapeHTML(p.substring(0, 7)) + '</a>').join(', ') +
+                            '</div>' : '<div>root commit</div>') +
                     '</div>' +
                     (c.body ? '<div class="detail-body">' + escapeHTML(c.body) + '</div>' : '') +
                     '<div class="diff-header">' +
@@ -775,6 +828,10 @@ struct HTMLGenerator {
                 content.querySelectorAll('.diff-toggle button').forEach(b => {
                     b.addEventListener('click', () => setDiffMode(b.dataset.mode));
                 });
+                content.querySelectorAll('.rev-link').forEach(a => {
+                    a.addEventListener('click', () => showRevision(a.dataset.rev));
+                });
+                wireRevisionBar();
                 pendingDiffHash = c.hash;
                 lastDiffText = null;
                 setDiffMode(diffMode);
@@ -795,6 +852,73 @@ struct HTMLGenerator {
                 panel.classList.remove('open');
                 backdrop.classList.remove('open');
                 if (selectedRow) { selectedRow.classList.remove('selected'); selectedRow = null; }
+            }
+
+            // ---- git show <revision> ----
+            // The panel's top bar takes anything `git show` does (SHA, branch, tag,
+            // HEAD~2, …). Swift resolves it to a commit — including ones outside
+            // the loaded graph — and replies via renderRevision().
+            let pendingRevision = null;
+
+            function revisionBarHTML(value) {
+                return '<div class="rev-bar">' +
+                    '<label class="rev-label" for="rev-input">git show</label>' +
+                    '<input id="rev-input" type="text" spellcheck="false" autocomplete="off" ' +
+                        'placeholder="commit, branch, tag, HEAD~2…" value="' + escapeHTML(value || '') + '">' +
+                    '<button id="rev-go">Show</button>' +
+                '</div>' +
+                '<div class="rev-error" id="rev-error"></div>';
+            }
+
+            function wireRevisionBar() {
+                const input = document.getElementById('rev-input');
+                input.addEventListener('keydown', e => { if (e.key === 'Enter') showRevision(input.value); });
+                document.getElementById('rev-go').addEventListener('click', () => showRevision(input.value));
+            }
+
+            function showRevision(rev) {
+                rev = (rev || '').trim();
+                if (!rev) return;
+                pendingRevision = rev;
+                const errorEl = document.getElementById('rev-error');
+                if (errorEl) errorEl.textContent = '';
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.revision) {
+                    window.webkit.messageHandlers.revision.postMessage(rev);
+                } else if (byHash[rev] !== undefined) {
+                    openDetail(byHash[rev]);   // no native side (e.g. a browser): loaded hashes only
+                } else if (errorEl) {
+                    errorEl.textContent = 'Revision lookup unavailable in this context.';
+                }
+            }
+
+            // Called by Swift with the resolved commit, or an error message.
+            window.renderRevision = function (rev, commit, error) {
+                if (rev !== pendingRevision) return;   // stale reply
+                pendingRevision = null;
+                if (commit) { openCommit(commit, true); return; }
+                const errorEl = document.getElementById('rev-error');
+                if (errorEl) errorEl.textContent = error || ('Unknown revision: ' + rev);
+            };
+
+            // ⌘L: focus the bar of the open commit, or open an empty prompt.
+            function openRevisionPrompt() {
+                const existing = panel.classList.contains('open') && document.getElementById('rev-input');
+                if (!existing) {
+                    if (selectedRow) { selectedRow.classList.remove('selected'); selectedRow = null; }
+                    pendingDiffHash = null;
+                    panel.classList.remove('wide');
+                    content.innerHTML = revisionBarHTML('') +
+                        '<div class="rev-hint">Show any commit, the way <span class="mono">git show</span> does: ' +
+                        'a full or short SHA, a branch or tag name, or an expression like ' +
+                        '<span class="mono">HEAD~2</span>, <span class="mono">main^2</span> or ' +
+                        '<span class="mono">main@{yesterday}</span>.</div>';
+                    wireRevisionBar();
+                    panel.classList.add('open');
+                    backdrop.classList.add('open');
+                }
+                const input = document.getElementById('rev-input');
+                input.focus();
+                input.select();
             }
 
             // ---- Author activity panel ----
@@ -978,17 +1102,16 @@ struct HTMLGenerator {
                     });
                     listEl.innerHTML = rows;
 
-                    // Clicking a commit jumps to its full detail — but only if it's
-                    // actually loaded in the graph (results can include commits on
-                    // refs not loaded when --all wasn't passed at launch).
+                    // Clicking a commit jumps to its full detail. Results can include
+                    // commits the graph didn't load (refs not loaded without --all);
+                    // those are looked up the same way as `git show <sha>`.
                     listEl.querySelectorAll('.author-commit').forEach(el => {
                         const idx = byHash[el.dataset.hash];
-                        if (idx === undefined) {
-                            el.style.cursor = 'default';
-                            el.title = 'Not in the loaded graph';
-                            return;
-                        }
-                        el.addEventListener('click', () => openDetail(idx));
+                        if (idx === undefined) el.title = 'Not in the loaded graph';
+                        el.addEventListener('click', () => {
+                            if (idx === undefined) showRevision(el.dataset.hash);
+                            else openDetail(idx);
+                        });
                     });
                 }
 
@@ -1449,7 +1572,8 @@ struct HTMLGenerator {
             });
 
             // Expose for the native menu (⌘F item, reload uses native reload).
-            window.gitGraph = { openSearch: openSearch, closeSearch: closeSearch };
+            window.gitGraph = { openSearch: openSearch, closeSearch: closeSearch,
+                                openRevisionPrompt: openRevisionPrompt };
 
             // ---- Helpers ----
             function escapeHTML(s) {

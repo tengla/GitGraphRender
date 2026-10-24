@@ -52,6 +52,10 @@ Sources/git-graph/
 3. JS in the WebView reads the embedded JSON and draws the SVG graph + commit rows.
 4. Clicking a commit posts its hash to Swift via a `WKScriptMessageHandler`
    (`commit` handler); `AppDelegate` runs `git show` and calls `window.renderDiff`.
+5. The panel's `git show` bar (also View → Show Revision…, ⌘L) and the clickable
+   parent hashes post a revision to the `revision` handler; `GitRepository.commit(for:)`
+   resolves it (SHA, branch, tag, `HEAD~2`, …), `window.renderRevision` opens that
+   commit — even one outside the loaded graph — and step 4 fetches its diff.
 
 ### Key Design Decisions
 

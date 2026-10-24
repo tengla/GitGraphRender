@@ -57,6 +57,35 @@ import Testing
         #expect(total == 4)
     }
 
+    /// `git show <rev>` lookups: anything git can resolve, to the commit it names.
+    @Test(arguments: [
+        ("feature", "feature work"),
+        ("main~1", "main work"),
+        ("main^2", "feature work"),
+        ("v1.0", "merge feature"),
+        ("HEAD", "merge feature")
+    ])
+    func resolvesRevisions(revision: String, subject: String) throws {
+        let repo = try TestRepo.branchAndMerge()
+        let commit = try GitRepository.discover(at: repo.url.path).commit(for: revision)
+        #expect(commit.subject == subject)
+    }
+
+    @Test func resolvesShortHashes() throws {
+        let repo = try TestRepo.branchAndMerge()
+        let full = try repo.git("rev-parse", "feature")
+        let commit = try GitRepository.discover(at: repo.url.path).commit(for: String(full.prefix(7)))
+        #expect(commit.hash == full)
+        #expect(commit.parents.count == 1)
+    }
+
+    @Test(arguments: ["no-such-branch", "", "--output=/tmp/pwned", "HEAD~99"])
+    func rejectsUnknownRevisions(revision: String) throws {
+        let repo = try TestRepo.branchAndMerge()
+        let git = try GitRepository.discover(at: repo.url.path)
+        #expect(throws: GitRepository.GitError.self) { try git.commit(for: revision) }
+    }
+
     @Test func diffContainsThePatch() throws {
         let repo = try TestRepo.branchAndMerge()
         let hash = try repo.git("rev-parse", "main~1")   // "main work"

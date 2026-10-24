@@ -77,6 +77,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         config.userContentController.add(self, name: "commit")
         // Bridge: JS posts an author email → we reply with their activity report.
         config.userContentController.add(self, name: "author")
+        // Bridge: JS posts a revision (SHA, branch, HEAD~2, …) → we reply with its commit.
+        config.userContentController.add(self, name: "revision")
 
         webView = WKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
@@ -130,7 +132,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                                     since: (dict["since"] as? NSNumber)?.doubleValue,
                                     until: (dict["until"] as? NSNumber)?.doubleValue)
             }
+        case "revision":
+            if let revision = message.body as? String { handleRevisionRequest(revision: revision) }
         default: break
+        }
+    }
+
+    /// JS asked to `git show` a revision → resolve it to a commit off-thread and
+    /// hand it (or an error) to `window.renderRevision`. The panel then fetches
+    /// the diff through the usual `commit` bridge.
+    private func handleRevisionRequest(revision: String) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            var json = "null", message = "null"
+            do {
+                let commit = try self.repo.commit(for: revision)
+                if let data = try? JSONEncoder().encode(commit), let str = String(data: data, encoding: .utf8) {
+                    json = str
+                }
+            } catch {
+                message = Self.jsString(error.localizedDescription)
+            }
+            DispatchQueue.main.async {
+                let js = "window.renderRevision(\(Self.jsString(revision)), \(json), \(message));"
+                self.webView.evaluateJavaScript(js, completionHandler: nil)
+            }
         }
     }
 
@@ -210,6 +236,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         let viewMenu = NSMenu(title: "View")
         add(viewMenu, "Reload", #selector(reload), "r")
         add(viewMenu, "Find…", #selector(find), "f")
+        add(viewMenu, "Show Revision…", #selector(showRevision), "l")
         viewMenu.addItem(.separator())
         add(viewMenu, "Actual Size", #selector(resetZoom), "0")
         add(viewMenu, "Zoom In", #selector(zoomIn), "+")
@@ -236,6 +263,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
     @objc private func find() {
         webView.evaluateJavaScript("window.gitGraph && window.gitGraph.openSearch();", completionHandler: nil)
+    }
+
+    @objc private func showRevision() {
+        webView.evaluateJavaScript("window.gitGraph && window.gitGraph.openRevisionPrompt();", completionHandler: nil)
     }
 
     // Zoom is remembered across launches, so it only has to be set once.

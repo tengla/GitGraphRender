@@ -5,15 +5,15 @@ import WebKit
 /// "show me this commit's diff" requests back to `git`. Structurally this mirrors
 /// MarkdownRender's AppDelegate (window + WKWebView + menu), with the markdown
 /// pipeline swapped for the git pipeline.
-final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
-    private let repo: GitRepository
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    let repo: GitRepository
     private let theme: String
     private let maxCount: Int
     private let allBranches: Bool
     private let watchEnabled: Bool
 
     private var window: NSWindow!
-    private var webView: WKWebView!
+    var webView: WKWebView!
     private var watchSource: DispatchSourceFileSystemObject?
 
     init(repo: GitRepository, theme: String, maxCount: Int, allBranches: Bool, watchEnabled: Bool) {
@@ -79,6 +79,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         config.userContentController.add(self, name: "author")
         // Bridge: JS posts a revision (SHA, branch, HEAD~2, …) → we reply with its commit.
         config.userContentController.add(self, name: "revision")
+        // Bridge: JS posts { id, revision, path } → we reply with `git blame` of it.
+        config.userContentController.add(self, name: "blame")
+        // Bridge: JS posts a revision → we reply with its file list (blame suggestions).
+        config.userContentController.add(self, name: "files")
 
         webView = WKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
@@ -116,93 +120,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     }
 
     @objc private func reload() { loadGraph() }
-
-    // MARK: - WKScriptMessageHandler (commit diff bridge)
-
-    func userContentController(_ userContentController: WKUserContentController,
-                               didReceive message: WKScriptMessage) {
-        switch message.name {
-        case "commit":
-            if let hash = message.body as? String { handleCommitRequest(hash: hash) }
-        case "author":
-            // Payload is { email, since, until } — the email plus the loaded
-            // graph's date window (Unix seconds) so the report is scoped to it.
-            if let dict = message.body as? [String: Any], let email = dict["email"] as? String {
-                handleAuthorRequest(email: email,
-                                    since: (dict["since"] as? NSNumber)?.doubleValue,
-                                    until: (dict["until"] as? NSNumber)?.doubleValue)
-            }
-        case "revision":
-            if let revision = message.body as? String { handleRevisionRequest(revision: revision) }
-        default: break
-        }
-    }
-
-    /// JS asked to `git show` a revision → resolve it to a commit off-thread and
-    /// hand it (or an error) to `window.renderRevision`. The panel then fetches
-    /// the diff through the usual `commit` bridge.
-    private func handleRevisionRequest(revision: String) {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self else { return }
-            var json = "null", message = "null"
-            do {
-                let commit = try self.repo.commit(for: revision)
-                if let data = try? JSONEncoder().encode(commit), let str = String(data: data, encoding: .utf8) {
-                    json = str
-                }
-            } catch {
-                message = Self.jsString(error.localizedDescription)
-            }
-            DispatchQueue.main.async {
-                let js = "window.renderRevision(\(Self.jsString(revision)), \(json), \(message));"
-                self.webView.evaluateJavaScript(js, completionHandler: nil)
-            }
-        }
-    }
-
-    /// JS asked for a commit's diff → run `git show` off-thread → render it.
-    private func handleCommitRequest(hash: String) {
-        // Fetch off the main thread; git can be slow on big commits.
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self else { return }
-            let diff = self.repo.diff(for: hash)
-            DispatchQueue.main.async {
-                let js = "window.renderDiff(\(Self.jsString(hash)), \(Self.jsString(diff)));"
-                self.webView.evaluateJavaScript(js, completionHandler: nil)
-            }
-        }
-    }
-
-    /// JS asked for an author's activity → run `git log --all` off-thread (scoped
-    /// to the loaded graph's date window), encode the report to JSON, and hand it
-    /// to `window.renderAuthor`.
-    private func handleAuthorRequest(email: String, since: Double?, until: Double?) {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self else { return }
-            let activity = self.repo.authorActivity(email: email, since: since, until: until)
-            let json: String
-            if let activity,
-               let data = try? JSONEncoder().encode(activity),
-               let str = String(data: data, encoding: .utf8) {
-                json = str
-            } else {
-                json = "null"
-            }
-            DispatchQueue.main.async {
-                let js = "window.renderAuthor(\(Self.jsString(email)), \(json));"
-                self.webView.evaluateJavaScript(js, completionHandler: nil)
-            }
-        }
-    }
-
-    /// JSON-encodes a Swift string into a JS string literal (handles quotes,
-    /// newlines, backslashes, unicode) so it can be safely interpolated into JS.
-    private static func jsString(_ s: String) -> String {
-        if let data = try? JSONEncoder().encode(s), let str = String(data: data, encoding: .utf8) {
-            return str
-        }
-        return "\"\""
-    }
 
     // MARK: - Menu
 
@@ -252,6 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         add(viewMenu, "Reload", #selector(reload), "r")
         add(viewMenu, "Find…", #selector(find), "f")
         add(viewMenu, "Show Revision…", #selector(showRevision), "l")
+        add(viewMenu, "Blame File…", #selector(blameFile), "b")
         viewMenu.addItem(.separator())
         add(viewMenu, "Actual Size", #selector(resetZoom), "0")
         add(viewMenu, "Zoom In", #selector(zoomIn), "+")
@@ -282,6 +200,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
     @objc private func showRevision() {
         webView.evaluateJavaScript("window.gitGraph && window.gitGraph.openRevisionPrompt();", completionHandler: nil)
+    }
+
+    @objc private func blameFile() {
+        webView.evaluateJavaScript("window.gitGraph && window.gitGraph.openBlamePrompt();", completionHandler: nil)
     }
 
     // Zoom is remembered across launches, so it only has to be set once.

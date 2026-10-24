@@ -334,8 +334,9 @@ struct GitRepository {
 
     // MARK: - Process plumbing
 
+    /// Internal (not private) so the extensions in sibling files can use it.
     @discardableResult
-    private static func run(_ arguments: [String], workingDirectory: URL) throws -> String {
+    static func run(_ arguments: [String], workingDirectory: URL) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git"] + arguments

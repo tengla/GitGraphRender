@@ -379,6 +379,73 @@ struct HTMLGenerator {
         .rev-link, .detail-table .rev-link { color: var(--link-color); cursor: pointer; text-decoration: none; }
         .rev-link:hover { text-decoration: underline; }
 
+        .rev-bar button:disabled { opacity: 0.4; cursor: default; }
+        .back-link { display: inline-block; font-size: 0.9rem; margin: -6px 0 12px; }
+
+        /* git blame view */
+        .blame-bar #blame-rev { flex: 0 0 9em; }
+        .blame-bar .blame-nav { padding: 5px 9px; }
+        .blame-context { color: var(--text-secondary); font-size: 0.95rem; margin: 0 0 12px; }
+        .blame-context .mono { font-family: "SF Mono", SFMono-Regular, ui-monospace, Menlo, monospace; color: var(--text-color); }
+        .blame-table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+            font-family: "SF Mono", SFMono-Regular, ui-monospace, Menlo, monospace;
+            font-size: 0.95rem;
+            line-height: 1.6;
+            border: 1px solid var(--border-color);
+        }
+        .blame-table col.c-age { width: 5px; }
+        .blame-table col.c-info { width: 32em; }
+        .blame-table col.c-num { width: 3.8em; }
+        .blame-table td { padding: 0 10px; vertical-align: top; }
+        .blame-table td.blame-age { padding: 0; background: var(--lane-3); }
+        .blame-table tr.run-start td { border-top: 1px solid var(--border-color); }
+        .blame-table td.blame-info {
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            background: var(--code-bg);
+            border-right: 1px solid var(--border-color);
+        }
+        .blame-table td.num { text-align: right; color: var(--text-secondary); user-select: none; }
+        .blame-table td.code { white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
+        .blame-table tr.same-commit td.num, .blame-table tr.same-commit td.code { background: var(--diff-hunk-bg); }
+        .blame-table tr.blame-target td.num, .blame-table tr.blame-target td.code { background: var(--row-selected); }
+        .blame-meta { display: flex; align-items: baseline; gap: 10px; white-space: nowrap; overflow: hidden; }
+        .blame-hash { font-family: "SF Mono", SFMono-Regular, ui-monospace, Menlo, monospace; color: var(--link-color); cursor: pointer; }
+        .blame-hash:hover { text-decoration: underline; }
+        .blame-date { flex: 0 0 auto; }
+        .blame-author { flex: 0 1 9em; overflow: hidden; text-overflow: ellipsis; color: var(--text-color); }
+        .blame-summary { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+        .blame-prev {
+            flex: 0 0 auto;
+            margin-left: auto;
+            background: none;
+            border: 1px solid transparent;
+            border-radius: 4px;
+            padding: 0 5px;
+            font: inherit;
+            font-size: 1.2rem;
+            line-height: 1.1;
+            color: var(--text-secondary);
+            cursor: pointer;
+        }
+        .blame-prev:hover { border-color: var(--border-color); background: var(--bg-color); color: var(--link-color); }
+        .blame-prev.none { visibility: hidden; }
+        .diff-blame {
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            font-size: 0.8rem;
+            padding: 1px 9px;
+            border: 1px solid var(--border-color);
+            border-radius: 5px;
+            background: var(--bg-color);
+            color: var(--text-secondary);
+            cursor: pointer;
+        }
+        .diff-blame:hover { color: var(--link-color); border-color: var(--link-color); }
+
         /* Diff view: per-file blocks, drawn split (old | new) or unified. */
         .diff-header { display: flex; align-items: center; justify-content: space-between; margin: 18px 0 8px; }
         .diff-header .detail-section-title { margin: 0; }
@@ -776,7 +843,7 @@ struct HTMLGenerator {
             document.getElementById('detail-close').addEventListener('click', closeDetail);
             backdrop.addEventListener('click', closeDetail);
 
-            function openDetail(index) { openCommit(commits[index]); }
+            function openDetail(index) { blameReturn = null; openCommit(commits[index]); }
 
             // Shows a commit in the panel. `c` may come from the loaded graph or
             // from a `git show` lookup of a commit the graph doesn't contain.
@@ -802,6 +869,8 @@ struct HTMLGenerator {
 
                 content.innerHTML =
                     revisionBarHTML(c.shortHash) +
+                    (blameReturn ? '<a class="rev-link back-link" id="blame-return">&larr; Back to blame of ' +
+                        escapeHTML(blameReturn.path) + '</a>' : '') +
                     (index === undefined ? '<div class="rev-note">Not in the loaded graph ' +
                         '(older than the commits shown, or on a branch not loaded without --all).</div>' : '') +
                     '<div class="detail-subject">' + escapeHTML(c.subject) + '</div>' +
@@ -828,9 +897,11 @@ struct HTMLGenerator {
                 content.querySelectorAll('.diff-toggle button').forEach(b => {
                     b.addEventListener('click', () => setDiffMode(b.dataset.mode));
                 });
-                content.querySelectorAll('.rev-link').forEach(a => {
+                content.querySelectorAll('.rev-link[data-rev]').forEach(a => {
                     a.addEventListener('click', () => showRevision(a.dataset.rev));
                 });
+                const back = document.getElementById('blame-return');
+                if (back) back.addEventListener('click', showBlameEntry);
                 wireRevisionBar();
                 pendingDiffHash = c.hash;
                 lastDiffText = null;
@@ -906,6 +977,7 @@ struct HTMLGenerator {
                 if (!existing) {
                     if (selectedRow) { selectedRow.classList.remove('selected'); selectedRow = null; }
                     pendingDiffHash = null;
+                    blameReturn = null;
                     panel.classList.remove('wide');
                     content.innerHTML = revisionBarHTML('') +
                         '<div class="rev-hint">Show any commit, the way <span class="mono">git show</span> does: ' +
@@ -917,6 +989,251 @@ struct HTMLGenerator {
                     backdrop.classList.add('open');
                 }
                 const input = document.getElementById('rev-input');
+                input.focus();
+                input.select();
+            }
+
+            // ---- git blame ----
+            // Blame of one file at one revision, in the same panel. Each run of
+            // lines last changed by one commit shows that commit once; its ⟲ button
+            // re-blames the file as it was just before that change (git's
+            // `previous`: the parent and the file's path there, so renames are
+            // followed). Back/forward walk the trail of blames visited.
+            const blameTrail = [];     // visited { rev, path, line }
+            let blameAt = -1;          // index of the entry on screen
+            let blameRequestId = 0;    // ignores replies to blames navigated away from
+            let blameReturn = null;    // entry to offer "back to" from a commit opened off it
+            let fileListRev = null, fileList = [];
+
+            function openBlame(rev, path, line) {
+                blameTrail.splice(blameAt + 1);   // a new blame drops the forward trail
+                blameTrail.push({ rev: rev, path: path, line: line || 0 });
+                blameAt = blameTrail.length - 1;
+                showBlameEntry();
+            }
+
+            function stepBlame(delta) {
+                const next = blameAt + delta;
+                if (next < 0 || next >= blameTrail.length) return;
+                blameAt = next;
+                showBlameEntry();
+            }
+
+            function blameBarHTML(rev, path, withNav) {
+                return '<div class="rev-bar blame-bar">' +
+                    (withNav ? '<button class="blame-nav" id="blame-back" title="Back (⌘[)">&larr;</button>' +
+                               '<button class="blame-nav" id="blame-fwd" title="Forward (⌘])">&rarr;</button>' : '') +
+                    '<label class="rev-label" for="blame-path">git blame</label>' +
+                    '<input id="blame-rev" type="text" spellcheck="false" autocomplete="off" ' +
+                        'title="Revision" value="' + escapeHTML(rev) + '">' +
+                    '<input id="blame-path" type="text" spellcheck="false" autocomplete="off" list="blame-files" ' +
+                        'placeholder="path/to/file" value="' + escapeHTML(path) + '">' +
+                    '<datalist id="blame-files"></datalist>' +
+                    '<button id="blame-go">Blame</button>' +
+                '</div>' +
+                '<div class="rev-error" id="blame-error"></div>';
+            }
+
+            function wireBlameBar() {
+                const revInput = document.getElementById('blame-rev');
+                const pathInput = document.getElementById('blame-path');
+                const go = () => {
+                    const path = pathInput.value.trim();
+                    if (path) openBlame(revInput.value.trim() || 'HEAD', path, 0);
+                };
+                [revInput, pathInput].forEach(i => i.addEventListener('keydown', e => { if (e.key === 'Enter') go(); }));
+                document.getElementById('blame-go').addEventListener('click', go);
+                revInput.addEventListener('change', () => requestFileList(revInput.value.trim() || 'HEAD'));
+                const back = document.getElementById('blame-back'), fwd = document.getElementById('blame-fwd');
+                if (back) {
+                    back.disabled = blameAt <= 0;
+                    fwd.disabled = blameAt >= blameTrail.length - 1;
+                    back.addEventListener('click', () => stepBlame(-1));
+                    fwd.addEventListener('click', () => stepBlame(1));
+                }
+                requestFileList(revInput.value.trim() || 'HEAD');
+            }
+
+            // File paths at a revision, as suggestions for the path field.
+            function requestFileList(rev) {
+                if (rev === fileListRev) { fillFileList(); return; }
+                fileListRev = rev;
+                fileList = [];
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.files) {
+                    window.webkit.messageHandlers.files.postMessage(rev);
+                }
+            }
+
+            window.renderFileList = function (rev, files) {
+                if (rev !== fileListRev) return;
+                fileList = files || [];
+                fillFileList();
+            };
+
+            function fillFileList() {
+                const list = document.getElementById('blame-files');
+                if (list) list.innerHTML = fileList.map(f => '<option value="' + escapeHTML(f) + '">').join('');
+            }
+
+            function showBlameEntry() {
+                const entry = blameTrail[blameAt];
+                if (!entry) return;
+                if (selectedRow) { selectedRow.classList.remove('selected'); selectedRow = null; }
+                pendingDiffHash = null;
+                pendingRevision = null;
+                blameReturn = null;
+                panel.classList.add('wide');
+                // Going back fills in full 40-hex SHAs; 12 characters fit the field
+                // and still resolve.
+                const shownRev = /^[0-9a-f]{40}$/.test(entry.rev) ? entry.rev.slice(0, 12) : entry.rev;
+                content.innerHTML = blameBarHTML(shownRev, entry.path, true) +
+                    '<div class="blame-context" id="blame-context"></div>' +
+                    '<div class="detail-loading" id="blame-slot">Running git blame…</div>';
+                wireBlameBar();
+                panel.classList.add('open');
+                backdrop.classList.add('open');
+
+                const id = ++blameRequestId;
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.blame) {
+                    window.webkit.messageHandlers.blame.postMessage({ id: id, revision: entry.rev, path: entry.path });
+                } else {
+                    document.getElementById('blame-slot').textContent = '(blame unavailable in this context)';
+                }
+            }
+
+            // Called by Swift with the blame (or an error) for request `id`.
+            window.renderBlame = function (id, result, error) {
+                if (id !== blameRequestId) return;
+                const slot = document.getElementById('blame-slot');
+                if (!slot) return;
+                if (!result) {
+                    slot.className = 'rev-error';
+                    slot.textContent = error || 'git blame failed.';
+                    return;
+                }
+                const entry = blameTrail[blameAt];
+                const c = result.commit;
+                document.getElementById('blame-context').innerHTML =
+                    '<span class="mono">' + escapeHTML(result.path) + '</span> as of ' +
+                    '<a class="rev-link mono" data-rev="' + escapeHTML(c.hash) + '" title="git show ' +
+                        escapeHTML(c.shortHash) + '">' + escapeHTML(c.shortHash) + '</a> ' +
+                    escapeHTML(c.subject) + ' &middot; ' + relativeTime(c.timestamp);
+
+                // Age strip: the newest change in the file is fully colored, the oldest faint.
+                let oldest = Infinity, newest = -Infinity;
+                Object.keys(result.commits).forEach(h => {
+                    const t = result.commits[h].authorTime;
+                    if (t < oldest) oldest = t;
+                    if (t > newest) newest = t;
+                });
+
+                let html = '<table class="blame-table"><colgroup><col class="c-age"><col class="c-info">' +
+                           '<col class="c-num"><col></colgroup>';
+                result.lines.forEach((l, i) => {
+                    const k = result.commits[l.hash];
+                    const runStart = i === 0 || result.lines[i - 1].hash !== l.hash;
+                    const age = newest > oldest ? (k.authorTime - oldest) / (newest - oldest) : 1;
+                    html += '<tr class="' + (runStart ? 'run-start' : '') + '" data-hash="' + l.hash +
+                            '" data-line="' + (i + 1) + '">' +
+                        '<td class="blame-age" style="opacity:' + (0.15 + 0.85 * age).toFixed(2) + '"></td>' +
+                        '<td class="blame-info">' + (runStart ? blameInfoHTML(k, l) : '') + '</td>' +
+                        '<td class="num">' + (i + 1) + '</td>' +
+                        '<td class="code">' + escapeHTML(l.text) + '</td></tr>';
+                });
+                html += '</table>';
+                if (result.truncated) {
+                    html += '<div class="diff-file-note">Showing the first ' + result.lines.length + ' lines.</div>';
+                }
+                if (!result.lines.length) html = '<div class="diff-file-note">Empty file.</div>';
+                slot.className = '';
+                slot.innerHTML = html;
+                wireBlameTable(slot);
+
+                document.querySelectorAll('#blame-context .rev-link').forEach(a => {
+                    a.addEventListener('click', () => { openCommitFromBlame(a.dataset.rev, 0); });
+                });
+                if (entry.line > 0) {
+                    const row = slot.querySelector('tr[data-line="' + Math.min(entry.line, result.lines.length) + '"]');
+                    if (row) {
+                        row.classList.add('blame-target');
+                        row.scrollIntoView({ block: 'center' });
+                    }
+                }
+            };
+
+            function blameInfoHTML(k, l) {
+                const when = new Date(k.authorTime * 1000);
+                return '<div class="blame-meta">' +
+                    '<a class="blame-hash mono" data-hash="' + escapeHTML(k.hash) + '" title="git show ' +
+                        escapeHTML(k.shortHash) + '">' + escapeHTML(k.shortHash) + '</a>' +
+                    '<span class="blame-date" title="' + escapeHTML(when.toLocaleString()) + '">' +
+                        escapeHTML(when.toLocaleDateString()) + '</span>' +
+                    '<span class="blame-author" title="' + escapeHTML(k.author + ' <' + k.authorEmail + '>') + '">' +
+                        escapeHTML(k.author) + '</span>' +
+                    '<span class="blame-summary" title="' + escapeHTML(k.summary) + '">' + escapeHTML(k.summary) + '</span>' +
+                    (k.previousHash
+                        ? '<button class="blame-prev" data-rev="' + escapeHTML(k.previousHash) + '" data-path="' +
+                            escapeHTML(k.previousPath || k.filename) + '" data-line="' + l.origLine +
+                            '" title="Blame the file as it was before this change (' + escapeHTML(k.shortHash) +
+                            '^)">&#10226;</button>'
+                        : '<span class="blame-prev none" title="Added in the first commit &mdash; nothing further back">&#10226;</span>') +
+                '</div>';
+            }
+
+            function wireBlameTable(slot) {
+                const table = slot.querySelector('.blame-table');
+                if (!table) return;
+                table.addEventListener('click', e => {
+                    const row = e.target.closest('tr');
+                    const line = row ? parseInt(row.dataset.line, 10) : 0;
+                    const prev = e.target.closest('.blame-prev[data-rev]');
+                    if (prev) {
+                        // Remember where we were, so Back returns to this line.
+                        blameTrail[blameAt].line = line;
+                        openBlame(prev.dataset.rev, prev.dataset.path, parseInt(prev.dataset.line, 10) || 0);
+                        return;
+                    }
+                    const hash = e.target.closest('.blame-hash');
+                    if (hash) openCommitFromBlame(hash.dataset.hash, line);
+                });
+                // Hovering a line highlights every line from the same commit.
+                let hovered = null;
+                table.addEventListener('mouseover', e => {
+                    const row = e.target.closest('tr');
+                    const hash = row ? row.dataset.hash : null;
+                    if (hash === hovered) return;
+                    table.querySelectorAll('tr.same-commit').forEach(r => r.classList.remove('same-commit'));
+                    hovered = hash;
+                    if (hash) table.querySelectorAll('tr[data-hash="' + hash + '"]').forEach(r => r.classList.add('same-commit'));
+                });
+            }
+
+            // Opens a commit from the blame, offering a way back to this line.
+            function openCommitFromBlame(hash, line) {
+                if (line) blameTrail[blameAt].line = line;
+                showRevision(hash);
+                blameReturn = blameTrail[blameAt];
+            }
+
+            // ⌘B: focus the path of the open blame, or open an empty prompt at HEAD.
+            function openBlamePrompt() {
+                const existing = panel.classList.contains('open') && document.getElementById('blame-path');
+                if (!existing) {
+                    if (selectedRow) { selectedRow.classList.remove('selected'); selectedRow = null; }
+                    pendingDiffHash = null;
+                    pendingRevision = null;
+                    blameReturn = null;
+                    panel.classList.remove('wide');
+                    content.innerHTML = blameBarHTML('HEAD', '', false) +
+                        '<div class="rev-hint">See who last changed each line of a file, and when. ' +
+                        'Use <span class="mono">&#10226;</span> on any line to see the file as it was before ' +
+                        'that change, and &larr; &rarr; (<span class="mono">⌘[</span> <span class="mono">⌘]</span>) ' +
+                        'to retrace your steps. Paths are relative to the repository root.</div>';
+                    wireBlameBar();
+                    panel.classList.add('open');
+                    backdrop.classList.add('open');
+                }
+                const input = document.getElementById('blame-path');
                 input.focus();
                 input.select();
             }
@@ -962,6 +1279,7 @@ struct HTMLGenerator {
                 // Clear any commit-row selection — this is an author view, not a commit.
                 if (selectedRow) { selectedRow.classList.remove('selected'); selectedRow = null; }
                 pendingDiffHash = null;
+                blameReturn = null;
                 panel.classList.remove('wide');
 
                 const accent = colorForKey((email || name).toLowerCase());
@@ -1233,6 +1551,35 @@ struct HTMLGenerator {
                 if (!slot || lastDiffText == null) return;
                 slot.className = '';
                 slot.innerHTML = renderDiffHTML(parseDiff(lastDiffText), diffMode);
+                // Blame buttons live in each file's <summary>; don't let a click
+                // also collapse the file.
+                slot.querySelectorAll('.diff-blame').forEach(b => {
+                    b.addEventListener('click', e => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        openBlame(b.dataset.rev, b.dataset.path, parseInt(b.dataset.line, 10) || 0);
+                    });
+                });
+            }
+
+            // Where blame should land for a file in this commit's diff: the file
+            // as of this commit (or its parent, for a deleted file), scrolled to
+            // the first added line.
+            function blameTarget(f) {
+                if (f.status === 'D') return { rev: pendingDiffHash + '^', path: f.oldPath, line: 1 };
+                const path = f.newPath || (f.combined ? f.header.replace(/^diff --(cc|combined) /, '') : null);
+                let line = 1;
+                const hunk = f.hunks[0];
+                if (hunk && !f.combined) {
+                    let newNo = hunk.newStart;
+                    const firstAdd = hunk.lines.find(l => {
+                        if (l.t === 'add') return true;
+                        if (l.t === 'ctx') newNo++;
+                        return false;
+                    });
+                    line = firstAdd ? newNo : hunk.newStart;
+                }
+                return { rev: pendingDiffHash, path: path, line: line };
             }
 
             // Splits `git show` output into the preamble (header, message, --stat)
@@ -1458,12 +1805,17 @@ struct HTMLGenerator {
                     html = '<div class="diff-summary">' + escapeHTML(summary.trim()) + '</div>';
                 }
                 diff.files.forEach(f => {
+                    const target = f.binary ? null : blameTarget(f);
                     html += '<details class="diff-file" open><summary>' +
                         (f.status ? '<span class="diff-file-status">' + f.status + '</span>' : '') +
                         '<span class="diff-file-name">' + fileDisplayName(f) + '</span>' +
                         (f.combined ? '' :
                             '<span class="diff-file-counts"><span class="add">+' + f.adds + '</span>' +
                             '<span class="del">&minus;' + f.dels + '</span></span>') +
+                        (target && target.path ? '<button class="diff-blame" title="git blame this file' +
+                            (f.status === 'D' ? ' as it was before it was deleted' : ' at this commit') +
+                            '" data-rev="' + escapeHTML(target.rev) + '" data-path="' + escapeHTML(target.path) +
+                            '" data-line="' + target.line + '">Blame</button>' : '') +
                         '</summary>';
                     if (f.combined) {
                         // Merge commits: combined diffs have one column per parent and
@@ -1565,6 +1917,10 @@ struct HTMLGenerator {
                 if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
                     e.preventDefault();
                     openSearch();
+                } else if ((e.metaKey || e.ctrlKey) && (e.key === '[' || e.key === ']') &&
+                           panel.classList.contains('open') && document.getElementById('blame-back')) {
+                    e.preventDefault();
+                    stepBlame(e.key === '[' ? -1 : 1);
                 } else if (e.key === 'Escape') {
                     if (panel.classList.contains('open')) closeDetail();
                     else if (searchBar.classList.contains('open')) closeSearch();
@@ -1573,7 +1929,7 @@ struct HTMLGenerator {
 
             // Expose for the native menu (⌘F item, reload uses native reload).
             window.gitGraph = { openSearch: openSearch, closeSearch: closeSearch,
-                                openRevisionPrompt: openRevisionPrompt };
+                                openRevisionPrompt: openRevisionPrompt, openBlamePrompt: openBlamePrompt };
 
             // ---- Helpers ----
             function escapeHTML(s) {

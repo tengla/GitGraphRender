@@ -34,10 +34,12 @@ The release binary is at `.build/release/git-graph`.
 Sources/git-graph/
 ├── main.swift                  # CLI entry, argument parsing with ArgumentParser
 ├── App/
-│   └── AppDelegate.swift       # NSApplication delegate, window, WebView, diff bridge, watch
+│   ├── AppDelegate.swift       # NSApplication delegate, window, WebView, menu, watch
+│   └── AppDelegate+Bridge.swift # JS→Swift message handlers (commit, author, revision, blame, files)
 ├── Git/
-│   ├── GitModels.swift         # Commit / Ref / GraphData — Codable, serialized to JSON
-│   └── GitRepository.swift     # Process-based git runner + log parser + diff fetch
+│   ├── GitModels.swift         # Commit / Ref / GraphData / Blame* — Codable, serialized to JSON
+│   ├── GitRepository.swift     # Process-based git runner + log parser + diff/revision fetch
+│   └── GitRepository+Blame.swift # `git blame --porcelain` parser + file list for blame
 └── Rendering/
     ├── GraphLayout.swift       # Lane/color assignment algorithm
     └── HTMLGenerator.swift     # HTML template, CSS, and the SVG-drawing JS
@@ -56,6 +58,12 @@ Sources/git-graph/
    parent hashes post a revision to the `revision` handler; `GitRepository.commit(for:)`
    resolves it (SHA, branch, tag, `HEAD~2`, …), `window.renderRevision` opens that
    commit — even one outside the loaded graph — and step 4 fetches its diff.
+6. Blame (a diff file's Blame button, or View → Blame File…, ⌘B) posts
+   `{ id, revision, path }` to the `blame` handler; `GitRepository.blame` resolves
+   the revision to a SHA first (`git blame` misparses `--end-of-options`) and
+   parses `--porcelain`. Each commit's `previous` (parent + path, renames
+   followed) is what ⟲ "blame before this change" navigates to; the JS keeps a
+   back/forward trail of visited blames.
 
 ### Key Design Decisions
 

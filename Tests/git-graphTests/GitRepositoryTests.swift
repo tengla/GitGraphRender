@@ -86,6 +86,62 @@ import Testing
         #expect(throws: GitRepository.GitError.self) { try git.commit(for: revision) }
     }
 
+    @Test func blameAttributesEachLineAndLinksToThePriorVersion() throws {
+        let repo = try TestRepo.branchAndMerge()
+        let initHash = try repo.git("rev-parse", "main~2")
+        let blame = try GitRepository.discover(at: repo.url.path).blame(path: "README.md", revision: "HEAD")
+
+        #expect(blame.lines.map(\.text) == ["hello", "world"])
+        let hello = try #require(blame.commits[blame.lines[0].hash])
+        let world = try #require(blame.commits[blame.lines[1].hash])
+        #expect(hello.summary == "init")
+        #expect(world.summary == "main work")
+        #expect(world.author == "Test Author")
+        #expect(world.authorEmail == "author@example.com")
+        // "Before this change" for main work is init; init has nothing before it.
+        #expect(world.previousHash == initHash)
+        #expect(world.previousPath == "README.md")
+        #expect(hello.previousHash == nil)
+        #expect(blame.commit.subject == "merge feature")
+    }
+
+    @Test func blameAtAnOlderRevisionAndKeepsBlankLines() throws {
+        let repo = try TestRepo()
+        try repo.write("notes.txt", "one\n\n\tthree\n")
+        try repo.commit("first")
+        try repo.write("notes.txt", "one\n\n\tthree\nfour\n")
+        try repo.commit("second")
+        let git = try GitRepository.discover(at: repo.url.path)
+
+        #expect(try git.blame(path: "notes.txt", revision: "HEAD").lines.map(\.text) == ["one", "", "\tthree", "four"])
+        #expect(try git.blame(path: "notes.txt", revision: "HEAD~1").lines.count == 3)
+    }
+
+    @Test func blameFollowsRenames() throws {
+        let repo = try TestRepo.branchAndMerge()
+        try repo.git("mv", "README.md", "DOCS.md")
+        try repo.commit("rename readme")
+        let blame = try GitRepository.discover(at: repo.url.path).blame(path: "DOCS.md", revision: "HEAD")
+
+        let first = try #require(blame.commits[blame.lines[0].hash])
+        #expect(first.summary == "init")
+        #expect(first.filename == "README.md")
+    }
+
+    @Test func blameReportsAMissingPath() throws {
+        let repo = try TestRepo.branchAndMerge()
+        let git = try GitRepository.discover(at: repo.url.path)
+        #expect(throws: GitRepository.GitError.self) { try git.blame(path: "nope.txt", revision: "HEAD") }
+        #expect(throws: GitRepository.GitError.self) { try git.blame(path: "README.md", revision: "no-such-rev") }
+    }
+
+    @Test func listsFilesAtARevision() throws {
+        let repo = try TestRepo.branchAndMerge()
+        let git = try GitRepository.discover(at: repo.url.path)
+        #expect(try git.files(at: "HEAD").sorted() == ["README.md", "feature.txt"])
+        #expect(try git.files(at: "main~1") == ["README.md"])
+    }
+
     @Test func diffContainsThePatch() throws {
         let repo = try TestRepo.branchAndMerge()
         let hash = try repo.git("rev-parse", "main~1")   // "main work"

@@ -57,6 +57,38 @@ struct AuthorActivity: Codable {
     let mergeCount: Int        // merge commits authored (shown separately)
 }
 
+/// A commit that owns at least one line in a blame. `previousHash`/`previousPath`
+/// are git's `previous` field — the commit's parent and the file's path there —
+/// i.e. where to blame next to see the file *before* this change. Both are nil
+/// when the lines were added by a root commit (nothing further back).
+struct BlameCommit: Codable {
+    let hash: String
+    let shortHash: String
+    let author: String
+    let authorEmail: String
+    let authorTime: Double    // seconds since epoch
+    let summary: String       // first line of the message
+    let filename: String      // the file's path in this commit (differs after renames)
+    let previousHash: String?
+    let previousPath: String?
+}
+
+/// One line of a blamed file.
+struct BlameLine: Codable {
+    let hash: String          // commit that last changed this line
+    let origLine: Int         // line number in that commit's version of the file
+    let text: String
+}
+
+/// `git blame` of one file at one commit, fetched lazily on request.
+struct BlameResult: Codable {
+    let commit: Commit        // the revision blamed (resolved), for the header
+    let path: String
+    let lines: [BlameLine]    // in file order; line N is lines[N - 1]
+    let commits: [String: BlameCommit]
+    let truncated: Bool       // true when the file was cut at the line cap
+}
+
 /// The full payload handed to the WebView: commits plus a little metadata.
 struct GraphData: Codable {
     let commits: [Commit]

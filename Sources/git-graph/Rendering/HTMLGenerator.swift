@@ -58,10 +58,26 @@ struct HTMLGenerator {
             --row-selected: #ddf4ff;
             --pill-bg: #eaeef2;
             --shadow: rgba(31, 35, 40, 0.15);
+            --diff-add-bg: #e6ffec;
+            --diff-add-num: #ccffd8;
+            --diff-add-word: #abf2bc;
+            --diff-del-bg: #ffebe9;
+            --diff-del-num: #ffd7d5;
+            --diff-del-word: rgba(255, 129, 130, 0.4);
+            --diff-hunk-bg: #ddf4ff;
+            --diff-empty-bg: #f6f8fa;
         }
 
         @media (prefers-color-scheme: dark) {
             :root {
+                --diff-add-bg: rgba(46, 160, 67, 0.15);
+                --diff-add-num: rgba(63, 185, 80, 0.3);
+                --diff-add-word: rgba(46, 160, 67, 0.4);
+                --diff-del-bg: rgba(248, 81, 73, 0.1);
+                --diff-del-num: rgba(248, 81, 73, 0.3);
+                --diff-del-word: rgba(248, 81, 73, 0.4);
+                --diff-hunk-bg: rgba(56, 139, 253, 0.1);
+                --diff-empty-bg: #161b22;
                 --bg-color: #0d1117;
                 --text-color: #c9d1d9;
                 --text-secondary: #8b949e;
@@ -254,12 +270,15 @@ struct HTMLGenerator {
             border-left: 1px solid var(--border-color);
             box-shadow: -8px 0 24px var(--shadow);
             transform: translateX(100%);
-            transition: transform 0.22s cubic-bezier(0.2, 0.7, 0.2, 1);
+            transition: transform 0.22s cubic-bezier(0.2, 0.7, 0.2, 1),
+                        width 0.22s cubic-bezier(0.2, 0.7, 0.2, 1);
             z-index: 40;
             overflow-y: auto;
             padding: 24px;
         }
         .detail-panel.open { transform: translateX(0); }
+        /* Side-by-side diffs need room for two columns of code. */
+        .detail-panel.wide { width: min(1400px, 94vw); }
 
         .detail-backdrop {
             position: fixed;
@@ -315,6 +334,71 @@ struct HTMLGenerator {
         .detail-diff .meta { color: var(--text-secondary); font-weight: 600; }
         .detail-loading { color: var(--text-secondary); font-style: italic; }
         .detail-section-title { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-secondary); margin: 18px 0 8px; font-weight: 600; }
+
+        /* Diff view: per-file blocks, drawn split (old | new) or unified. */
+        .diff-header { display: flex; align-items: center; justify-content: space-between; margin: 18px 0 8px; }
+        .diff-header .detail-section-title { margin: 0; }
+        .diff-toggle { display: inline-flex; border: 1px solid var(--border-color); border-radius: 6px; overflow: hidden; }
+        .diff-toggle button {
+            background: none;
+            border: none;
+            padding: 3px 10px;
+            font: inherit;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            cursor: pointer;
+        }
+        .diff-toggle button + button { border-left: 1px solid var(--border-color); }
+        .diff-toggle button.active { background: var(--code-bg); color: var(--text-color); font-weight: 600; }
+        .diff-preamble { margin-bottom: 14px; }
+        .diff-file { border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 14px; overflow: hidden; }
+        .diff-file > summary {
+            list-style: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 12px;
+            background: var(--code-bg);
+            border-bottom: 1px solid var(--border-color);
+            font-family: "SF Mono", SFMono-Regular, ui-monospace, Menlo, monospace;
+            font-size: 0.8rem;
+            cursor: pointer;
+            user-select: none;
+        }
+        .diff-file > summary::-webkit-details-marker { display: none; }
+        .diff-file > summary::before { content: "\\25B8"; color: var(--text-secondary); transition: transform 0.12s ease; }
+        .diff-file[open] > summary::before { transform: rotate(90deg); }
+        .diff-file:not([open]) > summary { border-bottom: none; }
+        .diff-file-name { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+        .diff-file-status { font-size: 0.7rem; padding: 0 6px; border-radius: 4px; background: var(--pill-bg); color: var(--text-secondary); font-weight: 600; }
+        .diff-file-counts { white-space: nowrap; font-size: 0.75rem; }
+        .diff-file-counts .add { color: var(--lane-1); }
+        .diff-file-counts .del { color: var(--lane-7); margin-left: 4px; }
+        .diff-file-note { padding: 10px 12px; color: var(--text-secondary); font-style: italic; font-size: 0.85rem; }
+        .diff-table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+            font-family: "SF Mono", SFMono-Regular, ui-monospace, Menlo, monospace;
+            font-size: 0.76rem;
+            line-height: 1.5;
+        }
+        .diff-table col.c-num { width: 4.2em; }
+        .diff-table td { padding: 0 8px; vertical-align: top; }
+        .diff-table td.num { text-align: right; color: var(--text-secondary); user-select: none; }
+        .diff-table td.code { white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
+        .diff-table.split td.code.old { border-right: 1px solid var(--border-color); }
+        .diff-table td.d-add { background: var(--diff-add-bg); }
+        .diff-table td.num.d-add { background: var(--diff-add-num); }
+        .diff-table td.d-del { background: var(--diff-del-bg); }
+        .diff-table td.num.d-del { background: var(--diff-del-num); }
+        .diff-table td.d-empty { background: var(--diff-empty-bg); }
+        .diff-table td.d-add .hl { background: var(--diff-add-word); border-radius: 2px; }
+        .diff-table td.d-del .hl { background: var(--diff-del-word); border-radius: 2px; }
+        .diff-table .sign { user-select: none; color: var(--text-secondary); }
+        .diff-table tr.d-hunk td { background: var(--diff-hunk-bg); color: var(--text-secondary); padding: 3px 8px; }
+        .diff-table tr.d-note td { color: var(--text-secondary); font-style: italic; padding: 3px 8px; }
+        .diff-table .nonl { color: var(--lane-7); margin-left: 4px; user-select: none; }
 
         /* Author-activity panel */
         .author-head { display: flex; align-items: center; gap: 12px; margin: 0 32px 4px 0; }
@@ -671,8 +755,21 @@ struct HTMLGenerator {
                             c.parents.map(p => escapeHTML(p.substring(0, 7))).join(', ') + '</span></div>' : '<div>root commit</div>') +
                     '</div>' +
                     (c.body ? '<div class="detail-body">' + escapeHTML(c.body) + '</div>' : '') +
-                    '<div class="detail-section-title">Changes</div>' +
+                    '<div class="diff-header">' +
+                        '<div class="detail-section-title">Changes</div>' +
+                        '<div class="diff-toggle">' +
+                            '<button data-mode="split">Split</button>' +
+                            '<button data-mode="unified">Unified</button>' +
+                        '</div>' +
+                    '</div>' +
                     '<div class="detail-loading" id="diff-slot">Loading diff…</div>';
+
+                content.querySelectorAll('.diff-toggle button').forEach(b => {
+                    b.addEventListener('click', () => setDiffMode(b.dataset.mode));
+                });
+                pendingDiffHash = c.hash;
+                lastDiffText = null;
+                setDiffMode(diffMode);
 
                 panel.classList.add('open');
                 backdrop.classList.add('open');
@@ -732,6 +829,8 @@ struct HTMLGenerator {
 
                 // Clear any commit-row selection — this is an author view, not a commit.
                 if (selectedRow) { selectedRow.classList.remove('selected'); selectedRow = null; }
+                pendingDiffHash = null;
+                panel.classList.remove('wide');
 
                 const accent = colorForKey((email || name).toLowerCase());
                 const initials = (name || email || '?').trim().charAt(0);
@@ -971,14 +1070,242 @@ struct HTMLGenerator {
                 return bars + axis;
             }
 
-            // Called by Swift once `git show` returns. Renders a lightly colorized diff.
+            // ---- Diff view ----
+            // `git show` output is parsed into per-file blocks and drawn either
+            // side by side (old | new, the default) or unified. The raw text is
+            // kept so the Split/Unified toggle re-renders without asking Swift again.
+            let diffMode = 'split';
+            try { if (localStorage.getItem('gitGraph.diffMode') === 'unified') diffMode = 'unified'; } catch (e) {}
+            let pendingDiffHash = null;
+            let lastDiffText = null;
+
+            function setDiffMode(mode) {
+                diffMode = mode;
+                try { localStorage.setItem('gitGraph.diffMode', mode); } catch (e) {}
+                panel.classList.toggle('wide', mode === 'split');
+                content.querySelectorAll('.diff-toggle button').forEach(b => {
+                    b.classList.toggle('active', b.dataset.mode === mode);
+                });
+                drawDiff();
+            }
+
+            // Called by Swift once `git show` returns.
             window.renderDiff = function (hash, diffText) {
-                const slot = document.getElementById('diff-slot');
-                if (!slot) return;
-                slot.className = 'detail-diff';
-                slot.id = '';
-                slot.innerHTML = colorizeDiff(diffText);
+                // Ignore stale replies (user clicked another commit since).
+                if (hash !== pendingDiffHash) return;
+                lastDiffText = diffText;
+                drawDiff();
             };
+
+            function drawDiff() {
+                const slot = document.getElementById('diff-slot');
+                if (!slot || lastDiffText == null) return;
+                slot.className = '';
+                slot.innerHTML = renderDiffHTML(parseDiff(lastDiffText), diffMode);
+            }
+
+            // Splits `git show` output into the preamble (header, message, --stat)
+            // and one entry per file, each with its hunks of typed lines.
+            function parseDiff(text) {
+                const preamble = [];
+                const files = [];
+                let file = null, hunk = null;
+                text.split('\\n').forEach(line => {
+                    if (line.startsWith('diff --git ') || line.startsWith('diff --cc ') ||
+                        line.startsWith('diff --combined ')) {
+                        file = { header: line, combined: !line.startsWith('diff --git '),
+                                 oldPath: null, newPath: null, status: null, binary: false,
+                                 hunks: [], raw: [line], adds: 0, dels: 0 };
+                        hunk = null;
+                        files.push(file);
+                        return;
+                    }
+                    if (!file) { preamble.push(line); return; }
+                    file.raw.push(line);
+
+                    if (line.startsWith('@@')) {
+                        // "@@ -12,7 +12,8 @@ ctx": parseInt stops at the comma.
+                        const parts = line.split(' ');
+                        hunk = { header: line, oldStart: parseInt(parts[1].slice(1), 10) || 0,
+                                 newStart: parseInt((parts[2] || '').slice(1), 10) || 0, lines: [] };
+                        file.hunks.push(hunk);
+                        return;
+                    }
+                    if (!hunk) {
+                        // File header lines, before the first hunk.
+                        if (line.startsWith('--- ')) file.oldPath = stripPrefix(line.slice(4));
+                        else if (line.startsWith('+++ ')) file.newPath = stripPrefix(line.slice(4));
+                        else if (line.startsWith('rename from ')) file.oldPath = line.slice(12);
+                        else if (line.startsWith('rename to ')) { file.newPath = line.slice(10); file.status = 'R'; }
+                        else if (line.startsWith('new file mode')) file.status = 'A';
+                        else if (line.startsWith('deleted file mode')) file.status = 'D';
+                        else if (line.startsWith('Binary files')) file.binary = true;
+                        return;
+                    }
+                    const ch = line.charAt(0);
+                    if (ch === '+') { hunk.lines.push({ t: 'add', s: line.slice(1) }); file.adds++; }
+                    else if (ch === '-') { hunk.lines.push({ t: 'del', s: line.slice(1) }); file.dels++; }
+                    else if (ch === ' ') hunk.lines.push({ t: 'ctx', s: line.slice(1) });
+                    else if (ch === '\\\\') {
+                        const prev = hunk.lines[hunk.lines.length - 1];
+                        if (prev) prev.nonl = true;
+                    }
+                    else if (line !== '') hunk.lines.push({ t: 'note', s: line });
+                });
+                return { preamble: preamble.join('\\n').trim(), files: files };
+            }
+
+            function stripPrefix(path) {
+                if (path === '/dev/null') return null;
+                return (path.startsWith('a/') || path.startsWith('b/')) ? path.slice(2) : path;
+            }
+
+            // Falls back to the "diff --git a/x b/y" line for mode-only/binary changes.
+            function fileDisplayName(f) {
+                if (f.oldPath && f.newPath && f.oldPath !== f.newPath) {
+                    return escapeHTML(f.oldPath) + ' &rarr; ' + escapeHTML(f.newPath);
+                }
+                if (f.newPath || f.oldPath) return escapeHTML(f.newPath || f.oldPath);
+                if (f.combined) return escapeHTML(f.header.replace(/^diff --(cc|combined) /, ''));
+                const rest = f.header.slice('diff --git '.length);
+                const b = rest.lastIndexOf(' b/');
+                return escapeHTML(b >= 0 ? rest.slice(b + 3) : rest);
+            }
+
+            // Walks a hunk into chunks: context lines, and change blocks pairing a
+            // run of deletions with the run of additions that follows it.
+            function hunkChunks(hunk) {
+                const chunks = [];
+                let oldNo = hunk.oldStart, newNo = hunk.newStart;
+                let change = null;
+                const flush = () => { if (change) { chunks.push(change); change = null; } };
+                hunk.lines.forEach(l => {
+                    if (l.t === 'del') {
+                        if (change && change.adds.length) flush();
+                        if (!change) change = { t: 'change', dels: [], adds: [] };
+                        change.dels.push({ line: l, no: oldNo++ });
+                    } else if (l.t === 'add') {
+                        if (!change) change = { t: 'change', dels: [], adds: [] };
+                        change.adds.push({ line: l, no: newNo++ });
+                    } else {
+                        flush();
+                        if (l.t === 'ctx') chunks.push({ t: 'ctx', line: l, oldNo: oldNo++, newNo: newNo++ });
+                        else chunks.push({ t: 'note', line: l });
+                    }
+                });
+                flush();
+                return chunks;
+            }
+
+            // Highlights the differing middle of a changed line pair (common
+            // prefix/suffix trimmed). Skipped when the lines barely overlap.
+            function inlineDiff(a, b) {
+                const max = Math.min(a.length, b.length);
+                let p = 0;
+                while (p < max && a[p] === b[p]) p++;
+                let s = 0;
+                while (s < max - p && a[a.length - 1 - s] === b[b.length - 1 - s]) s++;
+                if (p + s < Math.max(3, max * 0.25)) return null;
+                const mark = str => escapeHTML(str.slice(0, p)) +
+                    '<span class="hl">' + escapeHTML(str.slice(p, str.length - s)) + '</span>' +
+                    escapeHTML(str.slice(str.length - s));
+                return [mark(a), mark(b)];
+            }
+
+            // HTML for each side of a change block, with inline highlights on pairs.
+            function changeCells(change) {
+                const n = Math.max(change.dels.length, change.adds.length);
+                const rows = [];
+                for (let i = 0; i < n; i++) {
+                    const d = change.dels[i], a = change.adds[i];
+                    const hl = (d && a) ? inlineDiff(d.line.s, a.line.s) : null;
+                    rows.push({
+                        del: d ? { no: d.no, html: (hl ? hl[0] : escapeHTML(d.line.s)) + nonl(d.line) } : null,
+                        add: a ? { no: a.no, html: (hl ? hl[1] : escapeHTML(a.line.s)) + nonl(a.line) } : null
+                    });
+                }
+                return rows;
+            }
+
+            function nonl(line) {
+                return line.nonl ? '<span class="nonl" title="No newline at end of file">&#8856;</span>' : '';
+            }
+
+            function splitRows(hunk) {
+                let html = '<tr class="d-hunk"><td colspan="4">' + escapeHTML(hunk.header) + '</td></tr>';
+                hunkChunks(hunk).forEach(ch => {
+                    if (ch.t === 'ctx') {
+                        const code = escapeHTML(ch.line.s) + nonl(ch.line);
+                        html += '<tr><td class="num">' + ch.oldNo + '</td><td class="code old">' + code +
+                                '</td><td class="num">' + ch.newNo + '</td><td class="code">' + code + '</td></tr>';
+                    } else if (ch.t === 'note') {
+                        html += '<tr class="d-note"><td colspan="4">' + escapeHTML(ch.line.s) + '</td></tr>';
+                    } else {
+                        changeCells(ch).forEach(r => {
+                            html += '<tr>' +
+                                (r.del ? '<td class="num d-del">' + r.del.no + '</td><td class="code old d-del">' + r.del.html + '</td>'
+                                       : '<td class="num d-empty"></td><td class="code old d-empty"></td>') +
+                                (r.add ? '<td class="num d-add">' + r.add.no + '</td><td class="code d-add">' + r.add.html + '</td>'
+                                       : '<td class="num d-empty"></td><td class="code d-empty"></td>') +
+                                '</tr>';
+                        });
+                    }
+                });
+                return html;
+            }
+
+            function unifiedRows(hunk) {
+                let html = '<tr class="d-hunk"><td colspan="3">' + escapeHTML(hunk.header) + '</td></tr>';
+                const row = (cls, oldNo, newNo, sign, code) =>
+                    '<tr><td class="num ' + cls + '">' + oldNo + '</td><td class="num ' + cls + '">' + newNo +
+                    '</td><td class="code ' + cls + '"><span class="sign">' + sign + '</span>' + code + '</td></tr>';
+                hunkChunks(hunk).forEach(ch => {
+                    if (ch.t === 'ctx') {
+                        html += row('', ch.oldNo, ch.newNo, ' ', escapeHTML(ch.line.s) + nonl(ch.line));
+                    } else if (ch.t === 'note') {
+                        html += '<tr class="d-note"><td colspan="3">' + escapeHTML(ch.line.s) + '</td></tr>';
+                    } else {
+                        const rows = changeCells(ch);
+                        rows.forEach(r => { if (r.del) html += row('d-del', r.del.no, '', '-', r.del.html); });
+                        rows.forEach(r => { if (r.add) html += row('d-add', '', r.add.no, '+', r.add.html); });
+                    }
+                });
+                return html;
+            }
+
+            function renderDiffHTML(diff, mode) {
+                let html = diff.preamble
+                    ? '<div class="detail-diff diff-preamble">' + colorizeDiff(diff.preamble) + '</div>'
+                    : '';
+                diff.files.forEach(f => {
+                    html += '<details class="diff-file" open><summary>' +
+                        (f.status ? '<span class="diff-file-status">' + f.status + '</span>' : '') +
+                        '<span class="diff-file-name">' + fileDisplayName(f) + '</span>' +
+                        (f.combined ? '' :
+                            '<span class="diff-file-counts"><span class="add">+' + f.adds + '</span>' +
+                            '<span class="del">&minus;' + f.dels + '</span></span>') +
+                        '</summary>';
+                    if (f.combined) {
+                        // Merge commits: combined diffs have one column per parent and
+                        // don't map onto old|new, so show them as colorized text.
+                        html += '<div class="detail-diff" style="border-radius:0">' + colorizeDiff(f.raw.join('\\n')) + '</div>';
+                    } else if (f.binary) {
+                        html += '<div class="diff-file-note">Binary file changed</div>';
+                    } else if (!f.hunks.length) {
+                        html += '<div class="diff-file-note">No content changes</div>';
+                    } else if (mode === 'split') {
+                        html += '<table class="diff-table split"><colgroup><col class="c-num"><col>' +
+                                '<col class="c-num"><col></colgroup>' +
+                                f.hunks.map(splitRows).join('') + '</table>';
+                    } else {
+                        html += '<table class="diff-table unified"><colgroup><col class="c-num">' +
+                                '<col class="c-num"><col></colgroup>' +
+                                f.hunks.map(unifiedRows).join('') + '</table>';
+                    }
+                    html += '</details>';
+                });
+                return html;
+            }
 
             function colorizeDiff(text) {
                 return text.split('\\n').map(line => {

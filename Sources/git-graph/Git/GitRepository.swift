@@ -333,6 +333,8 @@ struct GitRepository {
             throw GitError.commandFailed(message)
         }
 
-        return String(data: outData, encoding: .utf8) ?? ""
+        // Lossy decode: a patch touching a non-UTF-8 file (Latin-1 source, binary
+        // git didn't detect) must not blank the whole output.
+        return String(decoding: outData, as: UTF8.self)
     }
 }
